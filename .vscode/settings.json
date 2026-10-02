@@ -1,0 +1,4 @@
+{
+    "rust-analyzer.linkedProjects": ["api/Cargo.toml"],
+    "rust-analyzer.cargo.targetDir": null
+}

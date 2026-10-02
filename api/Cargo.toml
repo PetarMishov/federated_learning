@@ -1,6 +1,10 @@
 [package]
-name = "federated_learning"
+name = "api"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+axum = "0.8.9"
+serde = "1.0.229"
+serde_json = "1.0.151"
+tokio = "1.53.1"
