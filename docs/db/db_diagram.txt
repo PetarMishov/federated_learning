@@ -1,0 +1,51 @@
+// permissions are hard coded and cannot be created
+// roles can be created (and maybe default ones)
+// assign permissions to roles
+
+Table users {
+  id integer [primary key]
+  username varchar [unique, not null]
+  password varchar [not null]
+}
+
+Table organizations {
+  id integer [primary key]
+  name varchar [not null]
+}
+
+Table user_organization {
+  user_id integer [not null]
+  org_id integer [not null]
+  role_id integer [not null]
+
+  indexes {
+    (user_id, org_id) [pk]
+  }
+}
+
+Table roles {
+  id integer [primary key]
+  name varchar [unique, not null]
+}
+
+Table role_permission {
+  role_id integer [not null]
+  perm_id integer [not null]
+
+  indexes {
+    (role_id, perm_id) [pk]
+  }
+}
+
+Table permissions {
+  id integer [primary key]
+  name varchar
+}
+
+Ref: role_permission.role_id > roles.id
+Ref: role_permission.perm_id > permissions.id
+
+Ref: user_organization.user_id > users.id
+Ref: user_organization.org_id > organizations.id
+
+Ref: user_organization.role_id > roles.id
