@@ -1,51 +1,206 @@
-// permissions are hard coded and cannot be created
-// roles can be created (and maybe default ones)
-// assign permissions to roles
+// Proposed schema only. Permissions are seeded from code.
+// GitHub: GitHub App user authorization with read-only repository contents.
+// GitLab: OAuth authorization-code flow with repository read access.
 
 Table users {
-  id integer [primary key]
+  id integer [pk]
   username varchar [unique, not null]
-  password varchar [not null]
+  password_hash varchar [not null]
+  Note: 'One hospital machine account represents one execution machine.'
 }
 
 Table organizations {
-  id integer [primary key]
+  id integer [pk]
   name varchar [not null]
+  owner_user_id integer [not null]
+  Note: 'Owner is the predefined all-permissions role, represented by owner_user_id. Only the current owner can transfer ownership. Owner must be a member: enforce transactionally, including organization creation. Ownership is separate from editable custom roles.'
 }
 
 Table user_organization {
   user_id integer [not null]
   org_id integer [not null]
-  role_id integer [not null]
-
+  role_id integer
   indexes {
     (user_id, org_id) [pk]
   }
+  Note: 'Custom role is optional for an owner or a member without an assigned role.'
 }
 
 Table roles {
-  id integer [primary key]
-  name varchar [unique, not null]
+  id integer [pk]
+  org_id integer [not null]
+  name varchar [not null]
+  indexes {
+    (org_id, name) [unique]
+    (org_id, id) [unique]
+  }
+  Note: 'Organization-specific custom roles. Role editors may grant only permissions they possess; enforce in the application.'
 }
 
 Table role_permission {
   role_id integer [not null]
   perm_id integer [not null]
-
   indexes {
     (role_id, perm_id) [pk]
   }
 }
 
 Table permissions {
-  id integer [primary key]
-  name varchar
+  id integer [pk]
+  name varchar [unique, not null]
+  Note: 'Include edit_roles, edit_project, start_deployment, and participate_in_deployment. Participation permits and requires inspecting published contents before acceptance.'
 }
 
-Ref: role_permission.role_id > roles.id
-Ref: role_permission.perm_id > permissions.id
+Enum provider_kind {
+  github
+  gitlab
+}
 
+Table provider_connections {
+  id integer [pk]
+  user_id integer [not null]
+  provider provider_kind [not null]
+  external_account_id varchar [not null]
+  external_username varchar
+  access_token_encrypted text [not null]
+  refresh_token_encrypted text
+  token_expires_at timestamp
+  granted_permissions text
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  invalidated_at timestamp
+  indexes {
+    (user_id, provider) [unique]
+  }
+  Note: 'Personal connections. External account ID is deliberately not unique. Protect credentials using keys outside the database; never publish them with code. Local unlink affects only this connection. Provider revocation affects credentials actually revoked, not all connections sharing an account ID. Check GitHub installation access when fetching repositories.'
+}
+
+Table projects {
+  id integer [pk]
+  org_id integer [not null]
+  created_by_user_id integer [not null]
+  name varchar [not null]
+  dockerfile_path varchar
+  compose_file_path varchar
+  build_context_path varchar [not null, default: '.']
+  env_file_path varchar
+  command_arguments json
+  input_mount_destination varchar [not null]
+  output_mount_destination varchar [not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  indexes {
+    (org_id, id) [unique]
+  }
+  Note: 'Editable defaults copied into new runs. Paths refer to snapshot contents. Validate Docker/Compose selection and mount destinations. Changing defaults does not silently modify existing runs.'
+}
+
+Enum snapshot_source {
+  github
+  gitlab
+  platform
+}
+
+Table snapshots {
+  id integer [pk]
+  project_id integer [not null]
+  created_by_user_id integer [not null]
+  source snapshot_source [not null]
+  source_repository_id varchar
+  source_repository_url varchar
+  source_branch varchar
+  source_commit_sha varchar
+  storage_key varchar [unique, not null]
+  content_sha256 varchar [not null]
+  created_at timestamp [not null]
+  indexes {
+    (project_id, id) [unique]
+  }
+  Note: 'Immutable entire-repository files at one revision, without .git/history, or platform-authored code. Files live in artifact storage. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
+}
+
+Enum run_status {
+  pending
+  running
+  completed
+  failed
+  cancelled
+}
+
+Table deployment_runs {
+  id integer [pk]
+  org_id integer [not null]
+  project_id integer [not null]
+  snapshot_id integer [not null]
+  created_by_user_id integer [not null]
+  started_by_user_id integer
+  status run_status [not null, default: 'pending']
+  configuration_revision integer [not null, default: 1]
+  dockerfile_path varchar
+  compose_file_path varchar
+  build_context_path varchar [not null]
+  env_file_path varchar
+  command_arguments json
+  input_mount_destination varchar [not null]
+  output_mount_destination varchar [not null]
+  coordinator_session_id varchar [unique]
+  coordinator_endpoint varchar
+  created_at timestamp [not null]
+  started_at timestamp
+  finished_at timestamp
+  Note: 'One execution per row; snapshot can be reused by new runs with fresh acceptance. Snapshot selection is immutable. While pending, shared execution changes atomically increment configuration_revision and clear every acceptance. Start atomically freezes settings and checks starter permission and each participant membership, permission, and accepted revision. Platform hosts coordinator; endpoint is not an authentication credential.'
+}
+
+Enum participation_status {
+  joined
+  withdrawn
+  revoked
+}
+
+Enum execution_status {
+  not_started
+  starting
+  running
+  completed
+  failed
+  stopped
+}
+
+Table run_participants {
+  run_id integer [not null]
+  user_id integer [not null]
+  participation_status participation_status [not null, default: 'joined']
+  accepted_configuration_revision integer
+  accepted_at timestamp
+  local_input_path varchar [not null]
+  local_output_path varchar [not null]
+  execution_status execution_status [not null, default: 'not_started']
+  joined_at timestamp [not null]
+  withdrawn_at timestamp
+  revoked_at timestamp
+  stop_requested_at timestamp
+  stopped_at timestamp
+  indexes {
+    (run_id, user_id) [pk]
+  }
+  Note: 'One hospital machine per participant. Acceptance is for this run and shared revision only; local path changes do not invalidate it. Input mount is read-only; output mount is writable. Datasets stay local. Withdrawal is allowed while pending. Membership or participation-permission loss revokes participation even during execution: reject coordinator updates and request local stop. Stop acknowledgment is separate because the machine may be offline. Enforce current membership in the run organization without deleting historical participation.'
+}
+
+Ref: organizations.owner_user_id > users.id
 Ref: user_organization.user_id > users.id
 Ref: user_organization.org_id > organizations.id
-
-Ref: user_organization.role_id > roles.id
+Ref: user_organization.(org_id, role_id) > roles.(org_id, id)
+Ref: roles.org_id > organizations.id
+Ref: role_permission.role_id > roles.id
+Ref: role_permission.perm_id > permissions.id
+Ref: provider_connections.user_id > users.id
+Ref: projects.org_id > organizations.id
+Ref: projects.created_by_user_id > users.id
+Ref: snapshots.project_id > projects.id
+Ref: snapshots.created_by_user_id > users.id
+Ref: deployment_runs.(org_id, project_id) > projects.(org_id, id)
+Ref: deployment_runs.(project_id, snapshot_id) > snapshots.(project_id, id)
+Ref: deployment_runs.created_by_user_id > users.id
+Ref: deployment_runs.started_by_user_id > users.id
+Ref: run_participants.run_id > deployment_runs.id
+Ref: run_participants.user_id > users.id
