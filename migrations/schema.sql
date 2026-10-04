@@ -17,6 +17,12 @@ CREATE TABLE users (
     password_hash text NOT NULL
 );
 
+-- Persist logout revocations across API restarts. Rows may be removed after expiry.
+CREATE TABLE revoked_tokens (
+    jti text PRIMARY KEY,
+    expires_at timestamptz NOT NULL
+);
+
 CREATE TABLE notifications (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id integer NOT NULL REFERENCES users (id),

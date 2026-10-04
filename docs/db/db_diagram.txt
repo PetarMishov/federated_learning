@@ -9,6 +9,12 @@ Table users {
   Note: 'One hospital machine account represents one execution machine.'
 }
 
+Table revoked_tokens {
+  jti text [pk]
+  expires_at timestamptz [not null]
+  Note: 'Revoked JWT identifiers persist across API restarts. Expired records may be removed.'
+}
+
 Table notifications {
   id integer [pk]
   user_id integer [not null]

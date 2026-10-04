@@ -8,6 +8,7 @@ use crate::state::AppState;
 pub struct Claims {
     pub sub: String,
     pub exp: u64,
+    pub jti: String,
 }
 
 pub async fn verify_user_password(
@@ -36,7 +37,7 @@ pub fn verify_user_token(
     app_state: &AppState,
 ) -> Result<Claims, jsonwebtoken::errors::Error> {
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    validation.set_required_spec_claims(&["sub", "exp"]);
+    validation.set_required_spec_claims(&["sub", "exp", "jti"]);
     validation.leeway = 0;
     let data = jsonwebtoken::decode::<Claims>(token, &app_state.decoding_key, &validation)?;
     Ok(data.claims)

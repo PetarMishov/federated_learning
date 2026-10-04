@@ -29,6 +29,12 @@ export class UsersApi {
     );
   }
 
+  logout() {
+    return this.http.post<void>('/users/logout', null, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
   getOrganizations() {
     return this.http.get<OrganizationList>('/users/organizations', {
       headers: { Authorization: `Bearer ${this.token()}` },

@@ -1,0 +1,30 @@
+:host {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 320px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 26px;
+  font-weight: 500;
+}
+
+input, button {
+  padding: 10px;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+  background: white;
+  font: inherit;
+}
+
+button { margin-top: 12px; }

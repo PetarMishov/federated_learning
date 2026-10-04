@@ -1,4 +1,5 @@
-use super::types::{Claims, VerifyLoginRequest};
+use super::types::VerifyLoginRequest;
+use crate::db::users::Claims;
 use crate::db::users::{verify_user_password, verify_user_token};
 use crate::state::AppState;
 use axum::{
@@ -26,6 +27,7 @@ pub async fn verify_login_request(
         let claims = Claims {
             sub: user_id.to_string(),
             exp: jsonwebtoken::get_current_timestamp() + 15 * 60,
+            jti: uuid::Uuid::new_v4().to_string(),
         };
         let token =
             jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &state.encoding_key)
@@ -35,10 +37,18 @@ pub async fn verify_login_request(
     Ok((StatusCode::UNAUTHORIZED, Json("".to_string())))
 }
 
-pub fn verify_user_credentials(
+pub async fn verify_user_credentials(
     headers: HeaderMap,
     state: &AppState,
 ) -> Result<i32, (StatusCode, &'static str)> {
+    let (user_id, _) = authenticated_claims(headers, state).await?;
+    Ok(user_id)
+}
+
+pub async fn authenticated_claims(
+    headers: HeaderMap,
+    state: &AppState,
+) -> Result<(i32, Claims), (StatusCode, &'static str)> {
     let unauthorized = (StatusCode::UNAUTHORIZED, "Valid bearer token required.");
     let authorization = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -56,5 +66,23 @@ pub fn verify_user_credentials(
     if user_id <= 0 {
         return Err(unauthorized);
     }
-    Ok(user_id)
+    if claims.jti.is_empty() {
+        return Err(unauthorized);
+    }
+    let revoked = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM revoked_tokens WHERE jti = $1)",
+    )
+    .bind(&claims.jti)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not verify session.",
+        )
+    })?;
+    if revoked {
+        return Err(unauthorized);
+    }
+    Ok((user_id, claims))
 }

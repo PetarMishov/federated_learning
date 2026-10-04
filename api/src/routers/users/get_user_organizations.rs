@@ -12,7 +12,7 @@ pub async fn get_user_organizations_request(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<OrganizationList>, (StatusCode, &'static str)> {
-    let user_id = verify_user_credentials(headers, &state)?;
+    let user_id = verify_user_credentials(headers, &state).await?;
 
     // Identity comes exclusively from the verified token, never request input.
     let organizations = get_user_organizations(&state.pool, user_id)
@@ -66,6 +66,7 @@ mod tests {
                 &Claims {
                     sub: user_id.to_string(),
                     exp: get_current_timestamp() + 900,
+                    jti: uuid::Uuid::new_v4().to_string(),
                 },
                 &state.encoding_key,
             )
@@ -104,6 +105,7 @@ mod tests {
                 &Claims {
                     sub: sub.into(),
                     exp,
+                    jti: uuid::Uuid::new_v4().to_string(),
                 },
                 key,
             )

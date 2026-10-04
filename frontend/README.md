@@ -57,16 +57,28 @@ Angular CLI does not come with an end-to-end testing framework by default. You c
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
-# API connection
 
-Run the Rust API on port 3000 and start this frontend with `npm start`.
-The development proxy forwards `/users/**` requests to `http://127.0.0.1:3000`.
-Restart `npm start` after changing the proxy configuration.
+## API connection
 
-Sign in inside the My organizations panel. With the demo population script,
-use username `demo` and password `demo-password`. The frontend stores the token
-in session storage and sends it as a bearer token when loading organizations.
-Expired sessions require signing in again. Notifications remain a placeholder.
+Run the Rust API on port 3000 and this frontend with `npm start`. The development
+proxy forwards `/users/**` to the API. Both the API and the PostgreSQL startup
+script use the root `.env`; no `api/.env` copy is needed.
+
+The initial page is `/login`, without a sidebar. Sign in with `demo` /
+`demo-password` after running the population script. Successful login opens
+`/home`; unauthenticated visits to that route redirect to login. Tokens are
+stored in session storage. Expired sessions require signing in again.
+
+Logout calls `POST /users/logout` with the bearer token, revokes that token in
+PostgreSQL, clears the browser session, and returns to login. Network failures
+keep the session available so logout can be retried. Each login gets a unique
+JWT identifier. Tokens issued before this change require signing in again.
+
+For an existing database, apply `migrations/add_revoked_tokens.sql` before
+starting the updated API. Fresh databases include this table in `schema.sql`.
+The table stores only revoked token identifiers and expiry timestamps, not
+bearer tokens. Revocations survive API restarts.
 
 For production hosting, route `/users/**` to the API through your web server;
-the Angular development proxy is only used by `ng serve`.
+the Angular development proxy is only used by `ng serve`. Notifications remain
+a placeholder.

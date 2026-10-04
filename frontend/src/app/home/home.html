@@ -3,16 +3,7 @@
   <section aria-labelledby="organizations-heading">
     <h2 id="organizations-heading">My organizations</h2>
     <div class="panel organizations-panel" [attr.aria-busy]="loading()">
-      @if (!api.token()) {
-        <form (ngSubmit)="signIn()">
-          <p>Sign in to see your organizations.</p>
-          <label for="username">Username</label>
-          <input id="username" name="username" autocomplete="username" required [(ngModel)]="username" />
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required [(ngModel)]="password" />
-          <button type="submit" [disabled]="loading()">{{ loading() ? 'Signing in…' : 'Sign in' }}</button>
-        </form>
-      } @else if (loading()) {
+      @if (loading()) {
         <p role="status">Loading organizations…</p>
       } @else if (!error()) {
         <ul class="organization-list">

@@ -1,0 +1,9 @@
+<form (ngSubmit)="signIn()">
+  <h1>Login</h1>
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" required [(ngModel)]="username" />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required [(ngModel)]="password" />
+  <button type="submit" [disabled]="loading()">{{ loading() ? 'Signing in…' : 'Login' }}</button>
+  @if (error()) { <p role="alert">{{ error() }}</p> }
+</form>
