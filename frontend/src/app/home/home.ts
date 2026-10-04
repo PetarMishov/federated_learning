@@ -1,12 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { DatePipe } from '@angular/common';
 import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { finalize } from 'rxjs';
-import { Organization, UsersApi } from '../users-api';
+import { Notification, Organization, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-home',
+  imports: [DatePipe],
   templateUrl: './home.html',
   styleUrl: './home.css',
 })
@@ -16,10 +18,16 @@ export class Home implements OnInit {
   protected readonly organizations = signal<Organization[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal('');
+  protected readonly notifications = signal<Notification[]>([]);
+  protected readonly notificationsLoading = signal(false);
+  protected readonly notificationsError = signal('');
   private readonly router = inject(Router);
 
   ngOnInit() {
-    if (this.api.token()) this.loadOrganizations();
+    if (this.api.token()) {
+      this.loadOrganizations();
+      this.loadNotifications();
+    }
   }
 
   protected loadOrganizations() {
@@ -43,5 +51,26 @@ export class Home implements OnInit {
     } else {
       this.error.set('Could not connect or load organizations. Please try again.');
     }
+  }
+
+  protected loadNotifications() {
+    if (this.notificationsLoading()) return;
+    this.notificationsLoading.set(true);
+    this.notificationsError.set('');
+    this.api.getNotifications().pipe(
+      takeUntilDestroyed(this.destroyRef),
+      finalize(() => this.notificationsLoading.set(false)),
+    ).subscribe({
+      next: (result) => this.notifications.set(result.notifications),
+      error: (error: HttpErrorResponse) => {
+        this.notifications.set([]);
+        if (error.status === 401) {
+          this.api.clearSession();
+          void this.router.navigateByUrl('/login');
+        } else {
+          this.notificationsError.set('Could not connect or load notifications. Please try again.');
+        }
+      },
+    });
   }
 }

@@ -12,6 +12,17 @@ export interface OrganizationList {
   organizations: Organization[];
 }
 
+export interface Notification {
+  id: number;
+  title: string;
+  is_read: boolean;
+  created_at: number;
+}
+
+export interface NotificationList {
+  notifications: Notification[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class UsersApi {
   private readonly http = inject(HttpClient);
@@ -37,6 +48,12 @@ export class UsersApi {
 
   getOrganizations() {
     return this.http.get<OrganizationList>('/users/organizations', {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getNotifications() {
+    return this.http.get<NotificationList>('/users/notifications', {
       headers: { Authorization: `Bearer ${this.token()}` },
     });
   }

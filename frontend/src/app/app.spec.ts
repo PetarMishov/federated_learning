@@ -31,6 +31,7 @@ describe('Authentication routes', () => {
     await router.navigateByUrl('/home');
     expect(router.url).toBe('/login');
     TestBed.inject(HttpTestingController).expectNone('/users/organizations');
+    TestBed.inject(HttpTestingController).expectNone('/users/notifications');
   });
 
   it('logs in, loads private organizations, and revokes the token on logout', async () => {
@@ -55,9 +56,13 @@ describe('Authentication routes', () => {
     const organizations = http.expectOne('/users/organizations');
     expect(organizations.request.headers.get('Authorization')).toBe('Bearer signed-token');
     organizations.flush({ organizations: [{ id: 1, name: 'Central Hospital', owner_user_id: 1 }] });
+    const notifications = http.expectOne('/users/notifications');
+    expect(notifications.request.headers.get('Authorization')).toBe('Bearer signed-token');
+    notifications.flush({ notifications: [{ id: 1, title: 'Welcome notification', is_read: false, created_at: Date.UTC(2026, 9, 4, 12, 30) }] });
     await fixture.whenStable();
     expect(page.textContent).toContain('Welcome, demo!');
     expect(page.textContent).toContain('Central Hospital');
+    expect(page.textContent).toContain('Welcome notification');
     expect(page.querySelector('aside')).toBeTruthy();
     page.querySelector<HTMLButtonElement>('.logout')!.click();
     const logout = http.expectOne('/users/logout');

@@ -23,7 +23,34 @@
     </div>
   </section>
   <section aria-labelledby="notifications-heading">
-    <h2 id="notifications-heading">Notifications</h2>
-    <div class="panel"></div>
+    <div class="notifications-header">
+      <h2 id="notifications-heading">Notifications</h2>
+      <button type="button">Mark all as read</button>
+    </div>
+    <div class="panel notifications-panel" [attr.aria-busy]="notificationsLoading()">
+      @if (notificationsLoading()) {
+        <p role="status">Loading notifications…</p>
+      } @else if (!notificationsError()) {
+        <ul class="notification-list">
+          @for (notification of notifications(); track notification.id) {
+            <li [class.unread]="!notification.is_read">
+              {{ notification.title }}
+              <time class="created-at" [attr.datetime]="(notification.created_at | date:'yyyy-MM-ddTHH:mm:ss.SSS':'+0000') + 'Z'">
+                {{ notification.created_at | date:'medium' }}
+              </time>
+              <span class="read-status">{{ notification.is_read ? 'Read' : 'Unread' }}</span>
+            </li>
+          } @empty {
+            <li>You have no notifications yet.</li>
+          }
+        </ul>
+      }
+      @if (notificationsError()) {
+        <p role="alert">{{ notificationsError() }}</p>
+        @if (api.token()) {
+          <button type="button" (click)="loadNotifications()">Try again</button>
+        }
+      }
+    </div>
   </section>
 </div>
