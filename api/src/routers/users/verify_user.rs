@@ -1,7 +1,11 @@
 use super::types::{Claims, VerifyLoginRequest};
-use crate::db::users::verify_user_password;
+use crate::db::users::{verify_user_password, verify_user_token};
 use crate::state::AppState;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+};
 use jsonwebtoken::{Algorithm, Header};
 
 pub async fn verify_login_request(
@@ -29,4 +33,28 @@ pub async fn verify_login_request(
         return Ok((StatusCode::OK, Json(token)));
     }
     Ok((StatusCode::UNAUTHORIZED, Json("".to_string())))
+}
+
+pub fn verify_user_credentials(
+    headers: HeaderMap,
+    state: &AppState,
+) -> Result<i32, (StatusCode, &'static str)> {
+    let unauthorized = (StatusCode::UNAUTHORIZED, "Valid bearer token required.");
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(unauthorized)?;
+    let mut parts = authorization.split_whitespace();
+    let scheme = parts.next().ok_or(unauthorized)?;
+    let token = parts.next().ok_or(unauthorized)?;
+    if !scheme.eq_ignore_ascii_case("Bearer") || parts.next().is_some() {
+        return Err(unauthorized);
+    }
+
+    let claims = verify_user_token(token, &state).map_err(|_| unauthorized)?;
+    let user_id = claims.sub.parse::<i32>().map_err(|_| unauthorized)?;
+    if user_id <= 0 {
+        return Err(unauthorized);
+    }
+    Ok(user_id)
 }

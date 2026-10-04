@@ -1,6 +1,4 @@
-use crate::db::{
-    organizations::get_user_organizations, types::OrganizationList, users::verify_user_token,
-};
+use crate::db::{organizations::get_user_organizations, types::OrganizationList};
 use crate::state::AppState;
 use axum::{
     Json,
@@ -8,27 +6,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 
+use super::verify_user::verify_user_credentials;
+
 pub async fn get_user_organizations_request(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<OrganizationList>, (StatusCode, &'static str)> {
-    let unauthorized = (StatusCode::UNAUTHORIZED, "Valid bearer token required.");
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(unauthorized)?;
-    let mut parts = authorization.split_whitespace();
-    let scheme = parts.next().ok_or(unauthorized)?;
-    let token = parts.next().ok_or(unauthorized)?;
-    if !scheme.eq_ignore_ascii_case("Bearer") || parts.next().is_some() {
-        return Err(unauthorized);
-    }
-
-    let claims = verify_user_token(token, &state).map_err(|_| unauthorized)?;
-    let user_id = claims.sub.parse::<i32>().map_err(|_| unauthorized)?;
-    if user_id <= 0 {
-        return Err(unauthorized);
-    }
+    let user_id = verify_user_credentials(headers, &state)?;
 
     // Identity comes exclusively from the verified token, never request input.
     let organizations = get_user_organizations(&state.pool, user_id)
