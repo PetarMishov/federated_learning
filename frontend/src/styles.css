@@ -1,0 +1,21 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: #222;
+  background: white;
+  font-family: Arial, sans-serif;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #444;
+  outline-offset: 4px;
+}
