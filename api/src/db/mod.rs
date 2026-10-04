@@ -1,4 +1,6 @@
 mod auth;
+pub mod organizations;
+pub mod types;
 pub mod users;
 
 use sqlx::{
