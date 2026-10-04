@@ -57,3 +57,16 @@ Angular CLI does not come with an end-to-end testing framework by default. You c
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+# API connection
+
+Run the Rust API on port 3000 and start this frontend with `npm start`.
+The development proxy forwards `/users/**` requests to `http://127.0.0.1:3000`.
+Restart `npm start` after changing the proxy configuration.
+
+Sign in inside the My organizations panel. With the demo population script,
+use username `demo` and password `demo-password`. The frontend stores the token
+in session storage and sends it as a bearer token when loading organizations.
+Expired sessions require signing in again. Notifications remain a placeholder.
+
+For production hosting, route `/users/**` to the API through your web server;
+the Angular development proxy is only used by `ng serve`.

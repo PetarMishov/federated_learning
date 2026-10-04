@@ -1,8 +1,35 @@
-<h1>Welcome, USERNAME!</h1>
+<h1>Welcome, {{ api.username() }}!</h1>
 <div class="home-panels">
   <section aria-labelledby="organizations-heading">
     <h2 id="organizations-heading">My organizations</h2>
-    <div class="panel"></div>
+    <div class="panel organizations-panel" [attr.aria-busy]="loading()">
+      @if (!api.token()) {
+        <form (ngSubmit)="signIn()">
+          <p>Sign in to see your organizations.</p>
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" required [(ngModel)]="username" />
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required [(ngModel)]="password" />
+          <button type="submit" [disabled]="loading()">{{ loading() ? 'Signing in…' : 'Sign in' }}</button>
+        </form>
+      } @else if (loading()) {
+        <p role="status">Loading organizations…</p>
+      } @else if (!error()) {
+        <ul class="organization-list">
+          @for (organization of organizations(); track organization.id) {
+            <li>{{ organization.name }}</li>
+          } @empty {
+            <li>You are not a member of any organizations yet.</li>
+          }
+        </ul>
+      }
+      @if (error()) {
+        <p role="alert">{{ error() }}</p>
+        @if (api.token()) {
+          <button type="button" (click)="loadOrganizations()">Try again</button>
+        }
+      }
+    </div>
   </section>
   <section aria-labelledby="notifications-heading">
     <h2 id="notifications-heading">Notifications</h2>

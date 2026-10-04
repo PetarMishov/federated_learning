@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env"))?;
+    dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../.env"))?;
     let secret = std::env::var("WEBTOKEN_SECRET")
         .map_err(|_| "WEBTOKEN_SECRET must be set before starting the API")?;
     let encoding_key = state::signing_key(&secret)?;
