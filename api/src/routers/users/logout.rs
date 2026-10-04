@@ -8,7 +8,7 @@ use axum::{
 pub async fn logout_request(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<StatusCode, (StatusCode, &'static str)> {
+) -> Result<(StatusCode, ()), (StatusCode, &'static str)> {
     let (_, claims) = authenticated_claims(headers, &state).await?;
     sqlx::query(
         "INSERT INTO revoked_tokens (jti, expires_at)
@@ -20,7 +20,7 @@ pub async fn logout_request(
     .execute(&state.pool)
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Could not log out."))?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((StatusCode::NO_CONTENT, ()))
 }
 
 #[cfg(test)]
@@ -74,7 +74,7 @@ mod tests {
             logout_request(State(state.clone()), headers(&first))
                 .await
                 .unwrap(),
-            StatusCode::NO_CONTENT
+            (StatusCode::NO_CONTENT, ())
         );
         let restarted = AppState {
             pool: state.pool.clone(),

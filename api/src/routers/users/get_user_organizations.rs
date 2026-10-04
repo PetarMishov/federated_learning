@@ -11,7 +11,7 @@ use super::verify_user::verify_user_credentials;
 pub async fn get_user_organizations_request(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<OrganizationList>, (StatusCode, &'static str)> {
+) -> Result<(StatusCode, Json<OrganizationList>), (StatusCode, &'static str)> {
     let user_id = verify_user_credentials(headers, &state).await?;
 
     // Identity comes exclusively from the verified token, never request input.
@@ -23,7 +23,7 @@ pub async fn get_user_organizations_request(
                 "Could not load organizations.",
             )
         })?;
-    Ok(Json(organizations))
+    Ok((StatusCode::OK, Json(organizations)))
 }
 
 #[cfg(test)]
@@ -78,9 +78,10 @@ mod tests {
             );
             // An unrelated identity supplied by the caller must have no effect.
             headers.insert("x-user-id", "999".parse().unwrap());
-            let Json(result) = get_user_organizations_request(State(state.clone()), headers)
+            let (status, Json(result)) = get_user_organizations_request(State(state.clone()), headers)
                 .await
                 .unwrap();
+            assert_eq!(status, StatusCode::OK);
             let names: Vec<_> = result
                 .organizations
                 .iter()

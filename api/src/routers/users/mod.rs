@@ -1,3 +1,4 @@
+mod get_user_notifications;
 mod get_user_organizations;
 mod logout;
 mod types;
@@ -17,5 +18,9 @@ pub fn users_router() -> Router<AppState> {
         .route(
             "/organizations",
             get(get_user_organizations::get_user_organizations_request),
+        )
+        .route(
+            "/notifications",
+            get(get_user_notifications::get_user_notifications_request),
         )
 }
