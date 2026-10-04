@@ -17,6 +17,15 @@ CREATE TABLE users (
     password_hash text NOT NULL
 );
 
+CREATE TABLE notifications (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id integer NOT NULL REFERENCES users (id),
+    title text NOT NULL,
+    message text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at timestamptz
+);
+
 CREATE TABLE organizations (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name text NOT NULL,
@@ -193,6 +202,7 @@ COMMENT ON TABLE run_participants IS
     'Acceptance covers one run and shared revision, not local paths. Mount input read-only and output writable; datasets stay local. Check current membership and participation permission in the run organization. Revocation rejects coordinator updates and requests local stop; record stop acknowledgment separately. Keep historical records after membership removal.';
 
 -- PostgreSQL does not automatically index the referencing side of foreign keys.
+CREATE INDEX notifications_user_created_idx ON notifications (user_id, created_at DESC);
 CREATE INDEX organizations_owner_idx ON organizations (owner_user_id);
 CREATE INDEX memberships_org_role_idx ON user_organization (org_id, role_id);
 CREATE INDEX role_permission_permission_idx ON role_permission (perm_id);
