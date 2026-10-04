@@ -4,13 +4,6 @@ use sqlx::PgPool;
 
 use crate::state::AppState;
 
-#[derive(Serialize)]
-pub struct UserData {
-    pub id: i64,
-    pub email: String,
-    pub username: String,
-}
-
 #[derive(Deserialize, Serialize)]
 pub struct Claims {
     pub sub: String,
@@ -47,18 +40,4 @@ pub fn verify_user_token(
     validation.leeway = 0;
     let data = jsonwebtoken::decode::<Claims>(token, &app_state.decoding_key, &validation)?;
     Ok(data.claims)
-}
-
-pub async fn get_user_by_id(pool: &PgPool, id: i64) -> Result<UserData, DBError> {
-    let (id, email, username) = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, email, username FROM users WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await?;
-    Ok(UserData {
-        id,
-        email,
-        username,
-    })
 }
