@@ -1,12 +1,12 @@
 // Logical schema. Executable definitions are in db/schema.sql.
 // Lifecycle constraints/functions are in db/deployment_rules.sql.
-// GitHub: GitHub App user authorization with read-only repository contents.
-// GitLab: OAuth authorization-code flow with repository read access.
+// Types, defaults, indexes, and foreign keys mirror db/schema.sql.
+// CHECK constraints and deferred constraints are described in table notes.
 
 Table users {
-  id integer [pk]
-  username varchar [unique, not null]
-  password_hash varchar [not null]
+  id integer [pk, increment]
+  username text [unique, not null]
+  password_hash text [not null]
   Note: 'One hospital machine account represents one execution machine.'
 }
 
@@ -17,23 +17,26 @@ Table revoked_tokens {
 }
 
 Table notifications {
-  id integer [pk]
+  id integer [pk, increment]
   user_id integer [not null]
   title text [not null]
   message text [not null]
   created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
   read_at timestamptz
   indexes {
-    (user_id, created_at)
+    (user_id, created_at) [name: 'notifications_user_created_idx'] // created_at DESC in PostgreSQL
   }
-  Note: 'Each notification belongs to one user. A null read_at means unread. No links to other tables.'
+  Note: 'Each notification belongs to one user. A null read_at means unread. Deployment updates are described in message; there is no deployment foreign key.'
 }
 
 Table organizations {
-  id integer [pk]
-  name varchar [not null]
+  id integer [pk, increment]
+  name text [not null]
   owner_user_id integer [not null]
-  Note: 'Owner is the predefined all-permissions role, represented by owner_user_id. Only the current owner can transfer ownership. Owner must be a member: enforce transactionally, including organization creation. Ownership is separate from editable custom roles.'
+  indexes {
+    owner_user_id [name: 'organizations_owner_idx']
+  }
+  Note: 'Owner membership is enforced by a DEFERRABLE INITIALLY DEFERRED composite foreign key. Owner is the predefined all-permissions role, represented by owner_user_id. Only the current owner can transfer ownership. Owner must be a member: enforce transactionally, including organization creation. Ownership is separate from editable custom roles.'
 }
 
 Table user_organization {
@@ -42,14 +45,15 @@ Table user_organization {
   role_id integer
   indexes {
     (user_id, org_id) [pk]
+    (org_id, role_id) [name: 'memberships_org_role_idx']
   }
   Note: 'Custom role is optional for an owner or a member without an assigned role.'
 }
 
 Table roles {
-  id integer [pk]
+  id integer [pk, increment]
   org_id integer [not null]
-  name varchar [not null]
+  name text [not null]
   indexes {
     (org_id, name) [unique]
     (org_id, id) [unique]
@@ -63,17 +67,19 @@ Table role_permission {
   scope permission_scope [not null, default: 'organization']
   indexes {
     (role_id, perm_id) [pk]
+    perm_id [name: 'role_permission_permission_idx']
   }
+  Note: 'CHECK requires organization scope; the composite permission foreign key enforces the catalog scope.'
 }
 
 Table permissions {
-  id integer [pk]
-  name varchar [unique, not null]
+  id integer [pk, increment]
+  name text [unique, not null]
   scope permission_scope [not null]
   indexes {
     (id, scope) [unique]
   }
-  Note: 'Include edit_roles, edit_project, start_deployment, and participate_in_deployment. Participation permits and requires inspecting published contents before acceptance.'
+  Note: 'Fixed catalog: edit_roles has organization scope; edit_project, start_deployment, and participate_in_deployment have project scope. A CHECK rejects other names or scopes. Participation permits and requires inspecting published contents before acceptance.'
 }
 
 Enum permission_scope {
@@ -89,8 +95,9 @@ Table role_project_permission {
   scope permission_scope [not null, default: 'project']
   indexes {
     (role_id, project_id, perm_id) [pk]
+    (project_id, role_id) [name: 'project_grants_project_idx']
   }
-  Note: 'Role and project must belong to the same organization. Only project-scoped permissions belong here; role_permission holds edit_roles only.'
+  Note: 'Role and project must belong to the same organization. A CHECK requires project scope; role_permission holds edit_roles only.'
 }
 
 Enum provider_kind {
@@ -99,18 +106,18 @@ Enum provider_kind {
 }
 
 Table provider_connections {
-  id integer [pk]
+  id integer [pk, increment]
   user_id integer [not null]
   provider provider_kind [not null]
-  external_account_id varchar [not null]
-  external_username varchar
+  external_account_id text [not null]
+  external_username text
   access_token_encrypted text [not null]
   refresh_token_encrypted text
-  token_expires_at timestamp
+  token_expires_at timestamptz
   granted_permissions text
-  created_at timestamp [not null]
-  updated_at timestamp [not null]
-  invalidated_at timestamp
+  created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  invalidated_at timestamptz
   indexes {
     (user_id, provider) [unique]
   }
@@ -118,21 +125,22 @@ Table provider_connections {
 }
 
 Table projects {
-  id integer [pk]
+  id integer [pk, increment]
   org_id integer [not null]
   created_by_user_id integer [not null]
-  name varchar [not null]
-  dockerfile_path varchar
-  compose_file_path varchar
-  build_context_path varchar [not null, default: '.']
-  env_file_path varchar
-  command_arguments json
-  input_mount_destination varchar [not null]
-  output_mount_destination varchar [not null]
-  created_at timestamp [not null]
-  updated_at timestamp [not null]
+  name text [not null]
+  dockerfile_path text
+  compose_file_path text
+  build_context_path text [not null, default: '.']
+  env_file_path text
+  command_arguments jsonb
+  input_mount_destination text [not null]
+  output_mount_destination text [not null]
+  created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
   indexes {
     (org_id, id) [unique]
+    created_by_user_id [name: 'projects_creator_idx']
   }
   Note: 'Editable defaults copied into new runs. Paths refer to snapshot contents. Validate Docker/Compose selection and mount destinations. Changing defaults does not silently modify existing runs.'
 }
@@ -145,21 +153,22 @@ Enum snapshot_source {
 }
 
 Table snapshots {
-  id integer [pk]
+  id integer [pk, increment]
   project_id integer [not null]
   created_by_user_id integer [not null]
   source snapshot_source [not null]
-  source_repository_id varchar
-  source_repository_url varchar
-  source_branch varchar
-  source_commit_sha varchar
-  storage_key varchar [unique, not null]
-  content_sha256 varchar [not null]
-  created_at timestamp [not null]
+  source_repository_id text
+  source_repository_url text
+  source_branch text
+  source_commit_sha text
+  storage_key text [unique, not null]
+  content_sha256 text [not null]
+  created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
   indexes {
     (project_id, id) [unique]
+    created_by_user_id [name: 'snapshots_creator_idx']
   }
-  Note: 'Immutable exact project files at one revision, without .git/history. Files live in local artifact storage and hashes identify the archives. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
+  Note: 'CHECK constraints require a 64-character hexadecimal content hash and a relative storage key without parent traversal. Immutable exact project files at one revision, without .git/history. Files live in local artifact storage and hashes identify the archives. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
 }
 
 Enum run_status {
@@ -172,35 +181,39 @@ Enum run_status {
 }
 
 Table deployment_runs {
-  id integer [pk]
+  id integer [pk, increment]
   org_id integer [not null]
   project_id integer [not null]
   snapshot_id integer [not null]
   name text [not null, default: 'Deployment']
-  change_summary text [not null]
+  change_summary text [not null, default: '']
   supersedes_run_id integer [unique]
   terminal_reason text
   cancelled_by_user_id integer
   created_by_user_id integer [not null]
   started_by_user_id integer
   status run_status [not null, default: 'pending']
-  dockerfile_path varchar
-  compose_file_path varchar
-  build_context_path varchar [not null]
-  env_file_path varchar
-  command_arguments json
-  input_mount_destination varchar [not null]
-  output_mount_destination varchar [not null]
-  coordinator_session_id varchar [unique]
-  coordinator_endpoint varchar
-  created_at timestamp [not null]
-  started_at timestamp
-  ended_at timestamp
+  dockerfile_path text
+  compose_file_path text
+  build_context_path text [not null]
+  env_file_path text
+  command_arguments jsonb
+  input_mount_destination text [not null]
+  output_mount_destination text [not null]
+  coordinator_session_id text [unique]
+  coordinator_endpoint text
+  created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  started_at timestamptz
+  ended_at timestamptz
   indexes {
     (project_id, id) [unique]
     (id, snapshot_id) [unique]
+    (project_id, snapshot_id) [name: 'runs_project_snapshot_idx']
+    (org_id, status) [name: 'runs_org_status_idx']
+    created_by_user_id [name: 'runs_creator_idx']
+    started_by_user_id [name: 'runs_starter_idx']
   }
-  Note: 'Explicit pending updates create a replacement and skip the predecessor. Snapshot/settings remain immutable. Starter must join with at least one other participant. One remaining participant continues; zero cancels. Pending/started can be cancelled. Finished/failed/cancelled/skipped are terminal.'
+  Note: 'CHECK constraints pair starter/start time, require start metadata for started/finished/failed, forbid start metadata for pending/skipped, require end time exactly for terminal states, order creation/start/end times, require a nonblank failure reason, restrict cancellation actors to cancelled runs, and forbid self-replacement. Explicit pending updates create a replacement and skip the predecessor. Snapshot/settings remain immutable. Starter must join with at least one other participant. One remaining participant continues; zero cancels. Pending/started can be cancelled. Finished/failed/cancelled/skipped are terminal.'
 }
 
 Enum participation_status {
@@ -229,23 +242,26 @@ Table run_participants {
   user_id integer [not null]
   participation_status participation_status [not null, default: 'pending']
   accepted_snapshot_id integer
-  accepted_at timestamp
-  local_input_path varchar
-  local_output_path varchar
+  accepted_at timestamptz
+  local_input_path text
+  local_output_path text
   execution_status execution_status [not null, default: 'not_started']
-  joined_at timestamp
-  removed_at timestamp
+  joined_at timestamptz
+  removed_at timestamptz
   removal_reason removal_reason
-  stop_requested_at timestamp
-  stopped_at timestamp
+  stop_requested_at timestamptz
+  stopped_at timestamptz
   indexes {
     (run_id, user_id) [pk]
+    user_id [name: 'participants_user_idx']
   }
-  Note: 'Pending users are eligible but have not accepted. Joined users accept this deployment snapshot. Joining/rejoining requires pending status. Removed covers voluntary departure, permission loss, or future unauthorized-behavior detection. Historical rows and stop acknowledgments survive termination. Local path edits do not invalidate shared acceptance.'
+  Note: 'CHECK constraints pair snapshot acceptance/time and removal reason/time. Joined requires acceptance, join time, and nonblank input/output paths. Pending requires no acceptance/join time and not_started execution. Pending users are eligible but have not accepted. Joined users accept this deployment snapshot. Joining/rejoining requires the deployment to be pending and the user to be eligible. Removed covers voluntary departure, permission loss, or future unauthorized-behavior detection. Historical rows and stop acknowledgments survive termination. Local path edits do not invalidate shared acceptance.'
 }
 
 Ref: notifications.user_id > users.id
 Ref: organizations.owner_user_id > users.id
+// Owner membership FK is DEFERRABLE INITIALLY DEFERRED.
+Ref: organizations.(owner_user_id, id) > user_organization.(user_id, org_id)
 Ref: user_organization.user_id > users.id
 Ref: user_organization.org_id > organizations.id
 Ref: user_organization.(org_id, role_id) > roles.(org_id, id)
