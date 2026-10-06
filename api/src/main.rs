@@ -1,3 +1,4 @@
+mod auth;
 mod db;
 mod routers;
 mod state;
@@ -17,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let router: Router = Router::new()
         .nest("/users", routers::users_router())
+        .nest("/organizations", routers::organizations_router())
         .fallback(not_found)
         .with_state(state::AppState {
             pool: pool.clone(),

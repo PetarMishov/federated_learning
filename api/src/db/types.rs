@@ -26,3 +26,16 @@ pub struct Notification {
     pub is_read: bool,
     pub created_at: f64,
 }
+
+#[derive(Serialize)]
+pub struct ProjectList {
+    pub projects: Vec<Project>,
+}
+
+#[derive(Serialize)]
+pub struct Project {
+    pub id: i32,
+    pub org_id: i32,
+    pub created_by_user_id: i32,
+    pub name: String,
+}

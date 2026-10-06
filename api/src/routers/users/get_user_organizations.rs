@@ -1,4 +1,4 @@
-use crate::db::{organizations::get_user_organizations, types::OrganizationList};
+use crate::db::{types::OrganizationList, users::get_user_organizations};
 use crate::state::AppState;
 use axum::{
     Json,
@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 
-use super::verify_user::verify_user_credentials;
+use crate::auth::verify_user_credentials;
 
 pub async fn get_user_organizations_request(
     State(state): State<AppState>,
@@ -78,9 +78,10 @@ mod tests {
             );
             // An unrelated identity supplied by the caller must have no effect.
             headers.insert("x-user-id", "999".parse().unwrap());
-            let (status, Json(result)) = get_user_organizations_request(State(state.clone()), headers)
-                .await
-                .unwrap();
+            let (status, Json(result)) =
+                get_user_organizations_request(State(state.clone()), headers)
+                    .await
+                    .unwrap();
             assert_eq!(status, StatusCode::OK);
             let names: Vec<_> = result
                 .organizations

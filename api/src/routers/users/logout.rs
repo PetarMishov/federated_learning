@@ -1,4 +1,4 @@
-use super::verify_user::authenticated_claims;
+use crate::auth::authenticated_claims;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -26,10 +26,8 @@ pub async fn logout_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routers::users::{
-        types::VerifyLoginRequest,
-        verify_user::{verify_login_request, verify_user_credentials},
-    };
+    use crate::auth::verify_user_credentials;
+    use crate::routers::users::{types::VerifyLoginRequest, verify_user::verify_login_request};
     use axum::Json;
     use jsonwebtoken::{DecodingKey, EncodingKey};
     use sqlx::PgPool;

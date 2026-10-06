@@ -80,6 +80,10 @@ button {
   font-weight: 600;
 }
 
+.organization-list a {
+  color: inherit;
+}
+
 .read-status {
   display: block;
   margin-top: 4px;

@@ -2,13 +2,13 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
 import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { finalize } from 'rxjs';
 import { Notification, Organization, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-home',
-  imports: [DatePipe],
+  imports: [DatePipe, RouterLink],
   templateUrl: './home.html',
   styleUrl: './home.css',
 })

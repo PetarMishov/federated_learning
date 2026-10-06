@@ -30,10 +30,7 @@ pub async fn get_user_notifications(
     })
 }
 
-pub async fn read_user_notifications(
-    pool: &PgPool,
-    user_id: i32,
-) -> Result<(), DBError> {
+pub async fn read_user_notifications(pool: &PgPool, user_id: i32) -> Result<(), DBError> {
     sqlx::query(
         "UPDATE notifications
          SET read_at = CURRENT_TIMESTAMP

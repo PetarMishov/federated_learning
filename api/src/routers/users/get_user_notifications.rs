@@ -5,7 +5,7 @@ use axum::{
 };
 
 use crate::db::{notifications::get_user_notifications, types::NotificationList};
-use crate::{routers::users::verify_user::verify_user_credentials, state::AppState};
+use crate::{auth::verify_user_credentials, state::AppState};
 
 pub async fn get_user_notifications_request(
     State(state): State<AppState>,

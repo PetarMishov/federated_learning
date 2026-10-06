@@ -3,6 +3,7 @@ import { CanActivateFn, Router, Routes } from '@angular/router';
 import { Home } from './home/home';
 import { Layout } from './layout/layout';
 import { Login } from './login/login';
+import { OrganizationPage } from './organization/organization';
 import { UsersApi } from './users-api';
 
 const authenticated: CanActivateFn = () =>
@@ -16,7 +17,10 @@ export const routes: Routes = [
     component: Layout,
     canActivate: [authenticated],
     canActivateChild: [authenticated],
-    children: [{ path: 'home', component: Home }],
+    children: [
+      { path: 'home', component: Home },
+      { path: 'organizations/:id', component: OrganizationPage },
+    ],
   },
   { path: '**', redirectTo: 'login' },
 ];

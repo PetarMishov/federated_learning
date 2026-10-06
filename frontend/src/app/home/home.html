@@ -8,7 +8,10 @@
       } @else if (!error()) {
         <ul class="organization-list">
           @for (organization of organizations(); track organization.id) {
-            <li>{{ organization.name }}</li>
+            <li>
+              <a [routerLink]="['/organizations', organization.id]"
+                [queryParams]="{ name: organization.name }">{{ organization.name }}</a>
+            </li>
           } @empty {
             <li>You are not a member of any organizations yet.</li>
           }
