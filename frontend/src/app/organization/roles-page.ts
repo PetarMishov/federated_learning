@@ -1,17 +1,18 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
 import { Member, Project, UsersApi } from '../users-api';
+import { RoleEditor } from './role-editor';
 
 @Component({
-  selector: 'app-organization',
-  imports: [RouterLink],
-  templateUrl: './organization.html',
+  selector: 'app-roles-page',
+  imports: [RoleEditor],
+  templateUrl: './roles-page.html',
   styleUrl: './organization.css',
 })
-export class OrganizationPage implements OnInit {
+export class RolesPage implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly api = inject(UsersApi);

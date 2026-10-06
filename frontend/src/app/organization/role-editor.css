@@ -1,0 +1,19 @@
+:host { display: block; }
+
+.role-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; }
+.role-list, .role-permissions, .member-assignments { border: 1px solid #ccc; padding: 16px; min-width: 0; }
+.role-list { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.member-assignments { margin-top: 24px; }
+h2 { margin: 0 0 16px; font-size: 18px; font-weight: 500; }
+h3 { font-size: 16px; font-weight: 500; }
+p { color: #555; }
+ul { list-style: none; padding: 0; margin: 0; }
+li { margin-bottom: 12px; }
+button, select, input:not([type='checkbox']) { padding: 6px 10px; border: 1px solid #aaa; background: white; font: inherit; max-width: 100%; box-sizing: border-box; }
+button[aria-pressed='true'] { background: #eee; }
+.table-container { overflow: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+th { font-weight: 500; }
+.member-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+@media (max-width: 900px) { .role-layout { grid-template-columns: 1fr; } }

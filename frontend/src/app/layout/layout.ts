@@ -3,7 +3,7 @@ import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterOutlet } from '@angular/router';
 import { filter, finalize, map } from 'rxjs';
-import { UsersApi } from '../users-api';
+import { Organization, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-layout',
@@ -26,6 +26,29 @@ export class Layout {
   private readonly destroyRef = inject(DestroyRef);
   protected readonly loggingOut = signal(false);
   protected readonly error = signal('');
+  protected readonly organizations = signal<Organization[]>([]);
+  protected readonly organizationsLoading = signal(false);
+  protected readonly organizationsError = signal('');
+  private organizationsLoaded = false;
+
+  protected loadOrganizations() {
+    if (this.organizationsLoaded || this.organizationsLoading()) return;
+    this.organizationsLoading.set(true);
+    this.organizationsError.set('');
+    this.api.getOrganizations().pipe(
+      takeUntilDestroyed(this.destroyRef),
+      finalize(() => this.organizationsLoading.set(false)),
+    ).subscribe({
+      next: (result) => {
+        this.organizations.set(result.organizations);
+        this.organizationsLoaded = true;
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) this.finishLogout();
+        else this.organizationsError.set('Could not load organizations.');
+      },
+    });
+  }
 
   protected logout() {
     if (this.loggingOut()) return;

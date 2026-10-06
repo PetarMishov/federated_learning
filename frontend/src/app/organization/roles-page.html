@@ -1,0 +1,7 @@
+<div class="organization-header">
+  <h1>Manage roles — {{ queryParams().get('name') || 'Organization' }}</h1>
+</div>
+<app-role-editor [organizationId]="routeParams()?.get('id') ?? ''"
+  [projects]="projects()" [members]="members()"
+  [projectsLoading]="loading()" [projectsError]="error()"
+  [membersLoading]="membersLoading()" [membersError]="membersError()" />

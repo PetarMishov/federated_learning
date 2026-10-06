@@ -4,6 +4,24 @@
   </div>
   <nav>
     <a routerLink="/home">Home</a>
+    <details #organizationMenu (toggle)="organizationMenu.open && loadOrganizations()">
+      <summary>My organizations</summary>
+      @if (organizationsLoading()) {
+        <p role="status">Loading organizations…</p>
+      } @else if (organizationsError()) {
+        <p role="alert">{{ organizationsError() }}</p>
+        <button type="button" (click)="loadOrganizations()">Try again</button>
+      } @else {
+        <ul>
+          @for (organization of organizations(); track organization.id) {
+            <li><a [routerLink]="['/organizations', organization.id]"
+              [queryParams]="{ name: organization.name }">{{ organization.name }}</a></li>
+          } @empty {
+            <li>No organizations yet.</li>
+          }
+        </ul>
+      }
+    </details>
     <a role="link" aria-disabled="true">Connectors</a>
   </nav>
   <div class="sidebar-footer">

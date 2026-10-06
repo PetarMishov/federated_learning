@@ -1,0 +1,89 @@
+<p>Role draft only. Changes are not saved or applied and are discarded when you leave this editor.</p>
+<div class="role-layout">
+  <section class="role-list" aria-labelledby="roles-heading">
+    <h2 id="roles-heading">Draft roles</h2>
+    <label for="new-role-name">Role name</label>
+    <input id="new-role-name" #roleName [value]="newRoleName()"
+      (input)="newRoleName.set(roleName.value)" (keydown.enter)="addRole()">
+    <button type="button" [disabled]="!newRoleName().trim()" (click)="addRole()">Add role</button>
+    <ul>
+      @for (role of roles(); track role.id) {
+        <li><button type="button" [attr.aria-pressed]="selectedId() === role.id"
+          (click)="selectedId.set(role.id)">{{ role.name }}</button></li>
+      } @empty {
+        <li>Add a role to choose its permissions.</li>
+      }
+    </ul>
+    <button type="button" (click)="resetDraft()">Discard draft</button>
+  </section>
+
+  <section class="role-permissions" aria-labelledby="permissions-heading">
+    <h2 id="permissions-heading">Permissions</h2>
+    @if (selectedRole(); as role) {
+      <h3>{{ role.name }}</h3>
+      <fieldset>
+        <legend>Organization</legend>
+        <label><input type="checkbox" #manageRoles [checked]="role.editRoles"
+          (change)="setOrganizationPermission(manageRoles.checked)"> Manage roles and permissions</label>
+      </fieldset>
+      <h3>Projects</h3>
+      <p>Project permissions apply only to the project in that row.</p>
+      @if (projectsLoading()) {
+        <p role="status">Loading projects…</p>
+      } @else if (projectsError()) {
+        <p role="alert">{{ projectsError() }}</p>
+      } @else {
+        <div class="table-container">
+          <table>
+            <thead><tr><th scope="col">Project</th>
+              @for (permission of projectPermissions; track permission.key) {
+                <th scope="col">{{ permission.label }}</th>
+              }
+            </tr></thead>
+            <tbody>
+              @for (project of projects(); track project.id) {
+                <tr><th scope="row">{{ project.name }}</th>
+                  @for (permission of projectPermissions; track permission.key) {
+                    <td><input type="checkbox" #projectPermission
+                      [attr.aria-label]="permission.label + ' for ' + project.name"
+                      [checked]="role.projects[project.id]?.[permission.key] ?? false"
+                      (change)="setProjectPermission(project.id, permission.key, projectPermission.checked)"></td>
+                  }
+                </tr>
+              } @empty {
+                <tr><td colspan="4">No projects to show yet.</td></tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    } @else {
+      <p>Select or add a draft role.</p>
+    }
+  </section>
+</div>
+
+<section class="member-assignments" aria-labelledby="assignments-heading">
+  <h2 id="assignments-heading">Member role assignments</h2>
+  @if (membersLoading()) {
+    <p role="status">Loading members…</p>
+  } @else if (membersError()) {
+    <p role="alert">{{ membersError() }}</p>
+  } @else {
+    @for (member of members(); track member.id) {
+      <div class="member-row">
+        <label [for]="'member-role-' + member.id">{{ member.username }}</label>
+        <select [id]="'member-role-' + member.id" #memberRole
+          [value]="assignments()[member.id] ?? ''" (change)="assignRole(member.id, memberRole.value)">
+          <option value="">Keep current role ({{ member.role_name || 'No role' }})</option>
+          <option value="none">No role</option>
+          @for (role of roles(); track role.id) {
+            <option [value]="role.id">{{ role.name }} (draft)</option>
+          }
+        </select>
+      </div>
+    } @empty {
+      <p>No members to show yet.</p>
+    }
+  }
+</section>

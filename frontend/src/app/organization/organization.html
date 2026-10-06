@@ -1,4 +1,8 @@
-<h1>{{ queryParams().get('name') || 'Organization' }}</h1>
+<div class="organization-header">
+  <h1>{{ queryParams().get('name') || 'Organization' }}</h1>
+  <button type="button" [routerLink]="['/organizations', routeParams()?.get('id'), 'roles']"
+    [queryParams]="{ name: queryParams().get('name') }">Manage roles</button>
+</div>
 <div class="organization-panels">
   <section aria-labelledby="projects-heading">
     <h2 id="projects-heading">Projects</h2>

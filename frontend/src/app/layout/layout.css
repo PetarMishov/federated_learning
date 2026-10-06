@@ -76,6 +76,25 @@ nav a {
   text-decoration: underline;
 }
 
+nav details {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+nav summary {
+  cursor: pointer;
+}
+
+nav ul {
+  list-style: none;
+  padding: 0 0 0 16px;
+  margin: 16px 0 0;
+}
+
+nav li + li {
+  margin-top: 12px;
+}
+
 :host(.project-layout) .page-content {
   height: 100dvh;
   display: flex;
