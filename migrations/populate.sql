@@ -43,14 +43,16 @@ BEGIN
 END $$;
 
 INSERT INTO notifications (user_id, title, message, created_at, read_at)
-SELECT u.id, n.title, n.message, CURRENT_TIMESTAMP - n.age,
-       CASE WHEN n.is_read THEN CURRENT_TIMESTAMP ELSE NULL END
+SELECT u.id, n.title, n.message, n.created_at, n.read_at
 FROM users AS u
 CROSS JOIN (VALUES
-    ('Welcome!', 'Your account is ready.', INTERVAL '3 days', true),
-    ('Organizations ready', 'Your demo organizations are available on the home page.', INTERVAL '1 day', false),
-    ('Explore your dashboard', 'View your organizations and notifications to get started.', INTERVAL '1 hour', false)
-) AS n(title, message, age, is_read)
+    ('Welcome!', 'Your account is ready.',
+     TIMESTAMPTZ '2026-10-01 09:00:00+00', TIMESTAMPTZ '2026-10-01 09:15:00+00'),
+    ('Organizations ready', 'Your demo organizations are available on the home page.',
+     TIMESTAMPTZ '2026-10-03 14:00:00+00', NULL),
+    ('Explore your dashboard', 'View your organizations and notifications to get started.',
+     TIMESTAMPTZ '2026-10-04 08:30:00+00', NULL)
+) AS n(title, message, created_at, read_at)
 WHERE u.username = 'demo'
   AND NOT EXISTS (
       SELECT 1 FROM notifications AS existing

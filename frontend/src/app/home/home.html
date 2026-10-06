@@ -25,9 +25,15 @@
   <section aria-labelledby="notifications-heading">
     <div class="notifications-header">
       <h2 id="notifications-heading">Notifications</h2>
-      <button type="button">Mark all as read</button>
+      <button type="button" (click)="markAllNotificationsAsRead()"
+        [disabled]="!api.token() || notificationsLoading() || markingNotificationsRead()">
+        {{ markingNotificationsRead() ? 'Marking as read…' : 'Mark all as read' }}
+      </button>
     </div>
     <div class="panel notifications-panel" [attr.aria-busy]="notificationsLoading()">
+      @if (markNotificationsError()) {
+        <p role="alert">{{ markNotificationsError() }}</p>
+      }
       @if (notificationsLoading()) {
         <p role="status">Loading notifications…</p>
       } @else if (!notificationsError()) {

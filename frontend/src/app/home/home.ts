@@ -21,6 +21,8 @@ export class Home implements OnInit {
   protected readonly notifications = signal<Notification[]>([]);
   protected readonly notificationsLoading = signal(false);
   protected readonly notificationsError = signal('');
+  protected readonly markingNotificationsRead = signal(false);
+  protected readonly markNotificationsError = signal('');
   private readonly router = inject(Router);
 
   ngOnInit() {
@@ -69,6 +71,26 @@ export class Home implements OnInit {
           void this.router.navigateByUrl('/login');
         } else {
           this.notificationsError.set('Could not connect or load notifications. Please try again.');
+        }
+      },
+    });
+  }
+
+  protected markAllNotificationsAsRead() {
+    if (!this.api.token() || this.notificationsLoading() || this.markingNotificationsRead()) return;
+    this.markingNotificationsRead.set(true);
+    this.markNotificationsError.set('');
+    this.api.markAllNotificationsAsRead().pipe(
+      takeUntilDestroyed(this.destroyRef),
+      finalize(() => this.markingNotificationsRead.set(false)),
+    ).subscribe({
+      next: () => this.loadNotifications(),
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.api.clearSession();
+          void this.router.navigateByUrl('/login');
+        } else {
+          this.markNotificationsError.set('Could not mark notifications as read. Please try again.');
         }
       },
     });

@@ -12,11 +12,19 @@ h1 {
 .home-panels {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 40px;
+  column-gap: 40px;
+  row-gap: 24px;
+}
+
+.home-panels > section {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 2;
 }
 
 h2 {
-  margin: 0 0 24px;
+  margin: 0;
+  align-self: center;
   font-size: 18px;
   font-weight: 500;
 }
@@ -85,7 +93,6 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 24px;
 }
 
 .notifications-header h2 {

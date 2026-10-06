@@ -58,6 +58,12 @@ export class UsersApi {
     });
   }
 
+  markAllNotificationsAsRead() {
+    return this.http.post<void>('/users/read_notifications', null, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
   clearSession() {
     sessionStorage.removeItem('authToken');
     sessionStorage.removeItem('authUsername');
