@@ -19,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let router: Router = Router::new()
         .nest("/users", routers::users_router())
         .nest("/organizations", routers::organizations_router())
+        .nest("/projects", routers::projects_router())
         .fallback(not_found)
         .with_state(state::AppState {
             pool: pool.clone(),

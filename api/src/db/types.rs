@@ -53,3 +53,22 @@ pub struct Member {
     pub role_id: Option<i32>,
     pub role_name: Option<String>,
 }
+
+#[derive(Serialize)]
+pub struct DeploymentList {
+    pub deployments: Vec<Deployment>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Deployment {
+    pub id: i32,
+    pub org_id: i32,
+    pub project_id: i32,
+    pub snapshot_id: i32,
+    pub name: String,
+    pub status: String,
+    pub created_by_user_id: i32,
+    pub created_at: f64,
+    pub started_at: Option<f64>,
+    pub ended_at: Option<f64>,
+}

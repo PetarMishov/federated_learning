@@ -1,6 +1,7 @@
 mod auth;
 pub mod notifications;
 pub mod organizations;
+pub mod projects;
 pub mod types;
 pub mod users;
 
