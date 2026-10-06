@@ -27,11 +27,26 @@
     </div>
   </section>
   <section aria-labelledby="deployments-heading">
-    <h2 id="deployments-heading">Recent deployments</h2>
-    <div class="panel">
-      <ul>
-        <li>No recent deployments to show yet.</li>
-      </ul>
+    <h2 id="deployments-heading">Deployments</h2>
+    <div class="panel deployments-panel" [attr.aria-busy]="deploymentsLoading()">
+      @if (deploymentsLoading()) {
+        <p role="status">Loading deployments…</p>
+      } @else if (deploymentsError()) {
+        <p role="alert">{{ deploymentsError() }}</p>
+        <button type="button" (click)="loadDeployments()">Try again</button>
+      } @else {
+        <ul>
+          @for (deployment of deployments(); track deployment.id) {
+            <li>
+              {{ deployment.name }} — {{ deployment.status }}
+              <p>Project: {{ deployment.project_name }}</p>
+              <p>{{ deployment.created_at | date:'short' }}</p>
+            </li>
+          } @empty {
+            <li>No deployments to show yet.</li>
+          }
+        </ul>
+      }
     </div>
   </section>
   <section aria-labelledby="members-heading">

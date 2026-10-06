@@ -1,17 +1,62 @@
-import { Component, inject, signal } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute } from '@angular/router';
+import { DatePipe } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
+import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
+import { Deployment, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-project',
+  imports: [DatePipe],
   templateUrl: './project.html',
   styleUrl: './project.css',
 })
-export class ProjectPage {
+export class ProjectPage implements OnInit {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly api = inject(UsersApi);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly retryDeployments = new Subject<void>();
+  protected readonly deployments = signal<Deployment[]>([]);
+  protected readonly deploymentsLoading = signal(false);
+  protected readonly deploymentsError = signal('');
   protected readonly source = signal<'github' | 'gitlab' | 'local'>('github');
   protected readonly drawer = signal<'members' | 'deployments' | null>(null);
   protected readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
+
+  ngOnInit() {
+    this.route.paramMap.pipe(
+      switchMap((params) => this.retryDeployments.pipe(
+        startWith(undefined),
+        switchMap(() => {
+          this.deployments.set([]);
+          this.deploymentsError.set('');
+          this.deploymentsLoading.set(true);
+          return this.api.getProjectDeployments(params.get('id') ?? '').pipe(
+            tap((result) => this.deployments.set(result.deployments)),
+            catchError((error: HttpErrorResponse) => {
+              if (error.status === 401) {
+                this.api.clearSession();
+                void this.router.navigateByUrl('/login');
+              } else {
+                this.deploymentsError.set(error.status === 404
+                  ? 'Project not found.'
+                  : 'Could not load deployments. Please try again.');
+              }
+              return EMPTY;
+            }),
+            finalize(() => this.deploymentsLoading.set(false)),
+          );
+        }),
+      )),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe();
+  }
+
+  protected loadDeployments() {
+    if (!this.deploymentsLoading()) this.retryDeployments.next();
+  }
 }

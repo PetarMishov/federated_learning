@@ -50,10 +50,32 @@
   @if (drawer()) {
     <aside id="project-drawer" class="drawer" aria-labelledby="drawer-heading" (keydown.escape)="drawer.set(null)">
       <div class="drawer-header">
-        <h2 id="drawer-heading">{{ drawer() === 'members' ? 'Members' : 'Recent deployments' }}</h2>
+        <h2 id="drawer-heading">{{ drawer() === 'members' ? 'Members' : 'Deployments' }}</h2>
         <button type="button" (click)="drawer.set(null)" aria-label="Close side drawer">Close</button>
       </div>
-      <p>{{ drawer() === 'members' ? 'No members to show yet.' : 'No recent deployments to show yet.' }}</p>
+      @if (drawer() === 'members') {
+        <p>No members to show yet.</p>
+      } @else {
+        <div aria-live="polite">
+          @if (deploymentsLoading()) {
+            <p>Loading deployments...</p>
+          } @else if (deploymentsError()) {
+            <p>{{ deploymentsError() }}</p>
+            <button type="button" (click)="loadDeployments()">Try again</button>
+          } @else {
+            <ul>
+              @for (deployment of deployments(); track deployment.id) {
+                <li>
+                  {{ deployment.name }} — {{ deployment.status }}
+                  <p>{{ deployment.created_at | date:'short' }}</p>
+                </li>
+              } @empty {
+                <li>No deployments to show yet.</li>
+              }
+            </ul>
+          }
+        </div>
+      }
     </aside>
   }
 </div>

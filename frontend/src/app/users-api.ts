@@ -23,6 +23,23 @@ export interface ProjectList {
   projects: Project[];
 }
 
+export interface Deployment {
+  id: number;
+  org_id: number;
+  project_id: number;
+  snapshot_id: number;
+  name: string;
+  status: 'pending' | 'started' | 'finished' | 'cancelled' | 'failed' | 'skipped';
+  created_by_user_id: number;
+  created_at: number;
+  started_at: number | null;
+  ended_at: number | null;
+}
+
+export interface DeploymentList {
+  deployments: Deployment[];
+}
+
 export interface Member {
   id: number;
   username: string;
@@ -89,6 +106,12 @@ export class UsersApi {
 
   getOrganizationMembers(orgId: string) {
     return this.http.get<MemberList>(`/organizations/${encodeURIComponent(orgId)}/members`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getProjectDeployments(projectId: string) {
+    return this.http.get<DeploymentList>(`/projects/${encodeURIComponent(projectId)}/deployments`, {
       headers: { Authorization: `Bearer ${this.token()}` },
     });
   }
