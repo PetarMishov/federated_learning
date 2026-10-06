@@ -39,6 +39,17 @@ BEGIN
         INSERT INTO user_organization (user_id, org_id)
         VALUES (demo_user_id, demo_org_id)
         ON CONFLICT (user_id, org_id) DO NOTHING;
+
+        INSERT INTO projects (
+            org_id, created_by_user_id, name,
+            input_mount_destination, output_mount_destination
+        )
+        SELECT demo_org_id, demo_user_id, p.name, '/data/input', '/data/output'
+        FROM (VALUES ('Model training'), ('Model evaluation')) AS p(name)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM projects AS existing
+            WHERE existing.org_id = demo_org_id AND existing.name = p.name
+        );
     END LOOP;
 END $$;
 
