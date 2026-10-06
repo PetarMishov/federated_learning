@@ -26,8 +26,13 @@ BEGIN
     SELECT id INTO snapshot FROM snapshots WHERE project_id = project ORDER BY id LIMIT 1;
     SELECT id INTO collaborator_role FROM roles WHERE org_id = (SELECT org_id FROM projects WHERE id = project) AND name = 'Demo coordinator';
 
-    IF (SELECT count(*) FROM deployment_runs) <> 7 OR (SELECT count(DISTINCT status) FROM deployment_runs) <> 6 THEN
+    IF (SELECT count(*) FROM deployment_runs) <> 25 OR (SELECT count(DISTINCT status) FROM deployment_runs) <> 6 THEN
         RAISE EXCEPTION 'Fixture population or rerun produced incorrect deployments';
+    END IF;
+    IF EXISTS (SELECT project_id FROM deployment_runs GROUP BY project_id
+               HAVING count(*) < 4 OR count(DISTINCT status) < 3)
+       OR (SELECT count(DISTINCT project_id) FROM deployment_runs) <> 6 THEN
+        RAISE EXCEPTION 'Every demo project needs multiple deployments with varied states';
     END IF;
     IF (SELECT count(*) FROM snapshots) <> 7 OR (SELECT count(*) FROM users) <> 6 THEN
         RAISE EXCEPTION 'Fixture population or rerun duplicated snapshots/users';
