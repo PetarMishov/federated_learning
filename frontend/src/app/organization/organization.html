@@ -11,7 +11,10 @@
       } @else {
         <ul>
           @for (project of projects(); track project.id) {
-            <li>{{ project.name }}</li>
+            <li>
+              <a [routerLink]="['/organizations', project.org_id, 'projects', project.id]"
+                [queryParams]="{ name: project.name }">{{ project.name }}</a>
+            </li>
           } @empty {
             <li>No projects to show yet.</li>
           }

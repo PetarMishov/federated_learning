@@ -1,8 +1,8 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Router, RouterLink, RouterOutlet } from '@angular/router';
-import { finalize } from 'rxjs';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterLink, RouterOutlet } from '@angular/router';
+import { filter, finalize, map } from 'rxjs';
 import { UsersApi } from '../users-api';
 
 @Component({
@@ -10,10 +10,19 @@ import { UsersApi } from '../users-api';
   imports: [RouterLink, RouterOutlet],
   templateUrl: './layout.html',
   styleUrl: './layout.css',
+  host: {
+    '[class.project-layout]': 'isProjectPage()',
+  },
 })
 export class Layout {
   private readonly api = inject(UsersApi);
   private readonly router = inject(Router);
+  private readonly url = toSignal(this.router.events.pipe(
+    filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+    map((event) => event.urlAfterRedirects),
+  ), { initialValue: this.router.url });
+  protected readonly isProjectPage = computed(() =>
+    /^\/organizations\/[^/]+\/projects\/[^/?]+/.test(this.url()));
   private readonly destroyRef = inject(DestroyRef);
   protected readonly loggingOut = signal(false);
   protected readonly error = signal('');

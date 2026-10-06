@@ -25,13 +25,16 @@ section {
 
 h2 {
   margin: 0;
-  align-self: center;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
   font-size: 18px;
   font-weight: 500;
 }
 
 .panel {
-  min-height: max(300px, calc(100dvh - 296px));
+  height: var(--dashboard-panel-height);
+  overflow: auto;
   padding: 24px;
   border: 1px solid #ccc;
   background: #fafafa;
@@ -53,6 +56,10 @@ li:first-child {
   padding-top: 0;
 }
 
+.projects-panel a {
+  color: inherit;
+}
+
 .member-role {
   display: block;
   margin-top: 4px;
@@ -72,7 +79,4 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .panel {
-    min-height: 260px;
-  }
 }

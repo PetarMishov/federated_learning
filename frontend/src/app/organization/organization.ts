@@ -1,12 +1,13 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
 import { Member, Project, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-organization',
+  imports: [RouterLink],
   templateUrl: './organization.html',
   styleUrl: './organization.css',
 })

@@ -1,0 +1,158 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 400px;
+  min-width: 0;
+  gap: 16px;
+}
+
+.project-header,
+.project-actions,
+.snapshot-sources,
+.drawer-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.project-header,
+.drawer-header {
+  justify-content: space-between;
+}
+
+h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 500;
+}
+
+h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.snapshot-controls {
+  border: 1px solid #ccc;
+  padding: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.snapshot-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1;
+}
+
+.snapshot-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.snapshot-field label {
+  font-size: 13px;
+}
+
+input {
+  min-width: 0;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #aaa;
+  font: inherit;
+}
+
+button {
+  padding: 6px 10px;
+  border: 1px solid #aaa;
+  background: white;
+}
+
+button[aria-pressed='true'] {
+  background: #eee;
+}
+
+.workspace-area {
+  display: flex;
+  flex: 1;
+  min-height: 240px;
+  min-width: 0;
+  gap: 16px;
+}
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #ccc;
+}
+
+.file-explorer {
+  width: 240px;
+  min-width: 140px;
+  max-width: 50%;
+  flex-shrink: 0;
+  resize: horizontal;
+  overflow: auto;
+  border-right: 1px solid #ccc;
+  padding: 16px;
+}
+
+.editor {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.drawer {
+  width: 280px;
+  max-width: 100%;
+  flex-shrink: 0;
+  border: 1px solid #ccc;
+  padding: 16px;
+  overflow: auto;
+}
+
+p {
+  font-size: 14px;
+  color: #555;
+  overflow-wrap: anywhere;
+}
+
+input:focus-visible {
+  outline: 2px solid #444;
+  outline-offset: 4px;
+}
+
+@media (max-width: 900px) {
+  .workspace-area {
+    flex-direction: column;
+  }
+
+  .drawer {
+    box-sizing: border-box;
+    width: 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .file-explorer {
+    width: 140px;
+    min-width: 80px;
+    padding: 12px;
+  }
+
+  .editor {
+    padding: 12px;
+  }
+}

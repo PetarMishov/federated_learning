@@ -4,6 +4,7 @@
   </div>
   <nav>
     <a routerLink="/home">Home</a>
+    <a role="link" aria-disabled="true">Connectors</a>
   </nav>
   <div class="sidebar-footer">
     <button class="logout" type="button" [disabled]="loggingOut()" (click)="logout()">{{ loggingOut() ? 'Logging out…' : 'Logout' }}</button>

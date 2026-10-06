@@ -24,13 +24,16 @@ h1 {
 
 h2 {
   margin: 0;
-  align-self: center;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
   font-size: 18px;
   font-weight: 500;
 }
 
 .panel {
-  min-height: max(300px, calc(100dvh - 296px));
+  height: var(--dashboard-panel-height);
+  overflow: auto;
   border: 1px solid #ccc;
   background: #fafafa;
 }
@@ -41,9 +44,6 @@ h2 {
     gap: 24px;
   }
 
-  .panel {
-    min-height: 260px;
-  }
 }
 
 .organizations-panel,
@@ -93,6 +93,7 @@ button {
 }
 
 .notifications-header {
+  min-height: 34px;
   display: flex;
   align-items: center;
   justify-content: space-between;

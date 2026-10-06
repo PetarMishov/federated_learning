@@ -1,0 +1,59 @@
+<header class="project-header">
+  <h1>{{ queryParams().get('name') || 'Project' }}</h1>
+  <div class="project-actions">
+    <button type="button" aria-controls="project-drawer" [attr.aria-expanded]="drawer() === 'members'"
+      (click)="drawer.set(drawer() === 'members' ? null : 'members')">Members</button>
+    <button type="button" aria-controls="project-drawer" [attr.aria-expanded]="drawer() === 'deployments'"
+      (click)="drawer.set(drawer() === 'deployments' ? null : 'deployments')">Deployments</button>
+  </div>
+</header>
+<section class="snapshot-controls" aria-labelledby="snapshot-heading">
+  <h2 id="snapshot-heading">Selected snapshot</h2>
+      <div class="snapshot-sources" role="group" aria-label="Snapshot source">
+        <button type="button" [attr.aria-pressed]="source() === 'github'"
+          (click)="source.set('github')">GitHub</button>
+        <button type="button" [attr.aria-pressed]="source() === 'gitlab'"
+          (click)="source.set('gitlab')">GitLab</button>
+        <button type="button" [attr.aria-pressed]="source() === 'local'"
+          (click)="source.set('local')">Local Folder</button>
+      </div>
+      <div class="snapshot-fields">
+        @if (source() === 'local') {
+          <div class="snapshot-field local-path">
+            <label for="snapshot-path">Path</label>
+            <input id="snapshot-path" type="text" placeholder="/path/to/project">
+          </div>
+        } @else {
+          <div class="snapshot-field">
+            <label for="snapshot-branch">Branch</label>
+            <input id="snapshot-branch" type="text" placeholder="main">
+          </div>
+          <div class="snapshot-field">
+            <label for="snapshot-commit">Commit</label>
+            <input id="snapshot-commit" type="text" placeholder="Commit SHA">
+          </div>
+        }
+        <button type="button">Load project</button>
+      </div>
+</section>
+<div class="workspace-area">
+  <section class="workspace" aria-label="Project files and editor">
+    <aside class="file-explorer" aria-labelledby="explorer-heading">
+      <h2 id="explorer-heading">Files</h2>
+      <p>No folder or repository loaded.</p>
+    </aside>
+    <div class="editor" aria-labelledby="editor-heading">
+      <h2 id="editor-heading">Editor</h2>
+      <p>Select a file to open it here.</p>
+    </div>
+  </section>
+  @if (drawer()) {
+    <aside id="project-drawer" class="drawer" aria-labelledby="drawer-heading" (keydown.escape)="drawer.set(null)">
+      <div class="drawer-header">
+        <h2 id="drawer-heading">{{ drawer() === 'members' ? 'Members' : 'Recent deployments' }}</h2>
+        <button type="button" (click)="drawer.set(null)" aria-label="Close side drawer">Close</button>
+      </div>
+      <p>{{ drawer() === 'members' ? 'No members to show yet.' : 'No recent deployments to show yet.' }}</p>
+    </aside>
+  }
+</div>

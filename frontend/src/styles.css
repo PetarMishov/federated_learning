@@ -19,3 +19,13 @@ a:focus-visible {
   outline: 2px solid #444;
   outline-offset: 4px;
 }
+
+:root {
+  --dashboard-panel-height: max(300px, calc(100dvh - 296px));
+}
+
+@media (max-width: 700px) {
+  :root {
+    --dashboard-panel-height: 260px;
+  }
+}

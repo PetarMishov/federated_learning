@@ -4,6 +4,7 @@ import { Home } from './home/home';
 import { Layout } from './layout/layout';
 import { Login } from './login/login';
 import { OrganizationPage } from './organization/organization';
+import { ProjectPage } from './project/project';
 import { UsersApi } from './users-api';
 
 const authenticated: CanActivateFn = () =>
@@ -20,6 +21,7 @@ export const routes: Routes = [
     children: [
       { path: 'home', component: Home },
       { path: 'organizations/:id', component: OrganizationPage },
+      { path: 'organizations/:orgId/projects/:id', component: ProjectPage },
     ],
   },
   { path: '**', redirectTo: 'login' },
