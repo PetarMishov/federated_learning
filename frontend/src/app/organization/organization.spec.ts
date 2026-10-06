@@ -5,7 +5,7 @@ import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angul
 import { BehaviorSubject, of } from 'rxjs';
 import { OrganizationPage } from './organization';
 
-describe('Organization projects', () => {
+describe('Organization projects and members', () => {
   let params: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
 
   beforeEach(() => {
@@ -33,11 +33,13 @@ describe('Organization projects', () => {
   it('loads authenticated projects and cancels stale requests when the organization changes', async () => {
     const fixture = TestBed.createComponent(OrganizationPage);
     fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/organizations/1/members').flush({ members: [] });
     const http = TestBed.inject(HttpTestingController);
     const first = http.expectOne('/organizations/1/projects');
     expect(first.request.headers.get('Authorization')).toBe('Bearer saved-token');
     params.next(convertToParamMap({ id: '2' }));
     expect(first.cancelled).toBe(true);
+    http.expectOne('/organizations/2/members').flush({ members: [] });
     http.expectOne('/organizations/2/projects').flush({ projects: [
       { id: 7, org_id: 2, created_by_user_id: 1, name: 'Model training' },
     ] });
@@ -48,6 +50,7 @@ describe('Organization projects', () => {
   it('shows errors and retries, then displays the empty state', async () => {
     const fixture = TestBed.createComponent(OrganizationPage);
     fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/organizations/1/members').flush({ members: [] });
     const http = TestBed.inject(HttpTestingController);
     http.expectOne('/organizations/1/projects').flush('Unavailable', { status: 500, statusText: 'Error' });
     await fixture.whenStable();
@@ -61,6 +64,7 @@ describe('Organization projects', () => {
   it('shows organization not found for a 404', async () => {
     const fixture = TestBed.createComponent(OrganizationPage);
     fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/organizations/1/members').flush({ members: [] });
     TestBed.inject(HttpTestingController).expectOne('/organizations/1/projects')
       .flush('Not found', { status: 404, statusText: 'Not Found' });
     await fixture.whenStable();
@@ -71,8 +75,60 @@ describe('Organization projects', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     const fixture = TestBed.createComponent(OrganizationPage);
     fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/organizations/1/members').flush({ members: [] });
     TestBed.inject(HttpTestingController).expectOne('/organizations/1/projects')
       .flush('Unauthorized', { status: 401, statusText: 'Unauthorized' });
+    await fixture.whenStable();
+    expect(sessionStorage.getItem('authToken')).toBeNull();
+    expect(navigate).toHaveBeenCalledWith('/login');
+  });
+
+  it('loads members with roles and replaces them when changing organizations', async () => {
+    const fixture = TestBed.createComponent(OrganizationPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/organizations/1/projects').flush({ projects: [] });
+    const request = http.expectOne('/organizations/1/members');
+    expect(request.request.headers.get('Authorization')).toBe('Bearer saved-token');
+    request.flush({ members: [
+      { id: 2, username: 'alice', role_id: 1, role_name: 'Researcher' },
+      { id: 3, username: 'bob', role_id: null, role_name: null },
+    ] });
+    await fixture.whenStable();
+    const panel = fixture.nativeElement.querySelector('.members-panel');
+    expect(panel.textContent).toContain('alice');
+    expect(panel.textContent).toContain('Researcher');
+    expect(panel.textContent).toContain('bob');
+    params.next(convertToParamMap({ id: '2' }));
+    http.expectOne('/organizations/2/projects').flush({ projects: [] });
+    http.expectOne('/organizations/2/members').flush({ members: [] });
+    await fixture.whenStable();
+    expect(panel.textContent).toContain('No members to show yet.');
+    expect(panel.textContent).not.toContain('alice');
+  });
+
+  it('retries members independently after an error', async () => {
+    const fixture = TestBed.createComponent(OrganizationPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/organizations/1/projects').flush({ projects: [] });
+    http.expectOne('/organizations/1/members').flush('Unavailable', { status: 500, statusText: 'Error' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.textContent).toContain('Could not load members.');
+    fixture.nativeElement.querySelector('.members-panel button').click();
+    http.expectNone('/organizations/1/projects');
+    http.expectOne('/organizations/1/members').flush({ members: [] });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.members-panel').textContent).toContain('No members to show yet.');
+  });
+
+  it('returns to login when members reject the session', async () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const fixture = TestBed.createComponent(OrganizationPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/organizations/1/projects').flush({ projects: [] });
+    http.expectOne('/organizations/1/members').flush('Unauthorized', { status: 401, statusText: 'Unauthorized' });
     await fixture.whenStable();
     expect(sessionStorage.getItem('authToken')).toBeNull();
     expect(navigate).toHaveBeenCalledWith('/login');

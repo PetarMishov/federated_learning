@@ -29,10 +29,26 @@
   </section>
   <section aria-labelledby="members-heading">
     <h2 id="members-heading">Members</h2>
-    <div class="panel">
-      <ul>
-        <li>No members to show yet.</li>
-      </ul>
+    <div class="panel members-panel" [attr.aria-busy]="membersLoading()">
+      @if (membersLoading()) {
+        <p role="status">Loading members…</p>
+      } @else if (membersError()) {
+        <p role="alert">{{ membersError() }}</p>
+        <button type="button" (click)="loadMembers()">Try again</button>
+      } @else {
+        <ul>
+          @for (member of members(); track member.id) {
+            <li>
+              {{ member.username }}
+              @if (member.role_name) {
+                <span class="member-role">{{ member.role_name }}</span>
+              }
+            </li>
+          } @empty {
+            <li>No members to show yet.</li>
+          }
+        </ul>
+      }
     </div>
   </section>
 </div>

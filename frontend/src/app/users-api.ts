@@ -23,6 +23,17 @@ export interface ProjectList {
   projects: Project[];
 }
 
+export interface Member {
+  id: number;
+  username: string;
+  role_id: number | null;
+  role_name: string | null;
+}
+
+export interface MemberList {
+  members: Member[];
+}
+
 export interface Notification {
   id: number;
   title: string;
@@ -71,6 +82,12 @@ export class UsersApi {
 
   getOrganizationProjects(orgId: string) {
     return this.http.get<ProjectList>(`/organizations/${encodeURIComponent(orgId)}/projects`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getOrganizationMembers(orgId: string) {
+    return this.http.get<MemberList>(`/organizations/${encodeURIComponent(orgId)}/members`, {
       headers: { Authorization: `Bearer ${this.token()}` },
     });
   }

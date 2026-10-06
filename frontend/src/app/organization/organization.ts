@@ -3,7 +3,7 @@ import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
-import { Project, UsersApi } from '../users-api';
+import { Member, Project, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-organization',
@@ -16,6 +16,10 @@ export class OrganizationPage implements OnInit {
   private readonly api = inject(UsersApi);
   private readonly destroyRef = inject(DestroyRef);
   private readonly retry = new Subject<void>();
+  private readonly retryMembers = new Subject<void>();
+  protected readonly members = signal<Member[]>([]);
+  protected readonly membersLoading = signal(false);
+  protected readonly membersError = signal('');
   protected readonly projects = signal<Project[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal('');
@@ -50,9 +54,40 @@ export class OrganizationPage implements OnInit {
       )),
       takeUntilDestroyed(this.destroyRef),
     ).subscribe();
+
+    this.route.paramMap.pipe(
+      switchMap((params) => this.retryMembers.pipe(
+        startWith(undefined),
+        switchMap(() => {
+          this.members.set([]);
+          this.membersError.set('');
+          this.membersLoading.set(true);
+          return this.api.getOrganizationMembers(params.get('id') ?? '').pipe(
+            tap((result) => this.members.set(result.members)),
+            catchError((error: HttpErrorResponse) => {
+              if (error.status === 401) {
+                this.api.clearSession();
+                void this.router.navigateByUrl('/login');
+              } else {
+                this.membersError.set(error.status === 404
+                  ? 'Organization not found.'
+                  : 'Could not load members. Please try again.');
+              }
+              return EMPTY;
+            }),
+            finalize(() => this.membersLoading.set(false)),
+          );
+        }),
+      )),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe();
   }
 
   protected loadProjects() {
     if (!this.loading()) this.retry.next();
+  }
+
+  protected loadMembers() {
+    if (!this.membersLoading()) this.retryMembers.next();
   }
 }

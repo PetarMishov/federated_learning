@@ -1,6 +1,7 @@
 -- Demo data for migrations/schema.sql. Run after creating the schema:
 -- psql "$DATABASE_URL" -f migrations/populate.sql
 -- Login: username = demo, password = demo-password
+-- Additional demo users: alice, bob, charlie, diana, eric (password = demo-password).
 -- Password uses Argon2id with the same parameters as Rust Argon2::default().
 \set ON_ERROR_STOP on
 
@@ -11,6 +12,12 @@ VALUES (
     'demo',
     '$argon2id$v=19$m=19456,t=2,p=1$v2IEKdUJ6RrtwyNZukpOOw$ffLcHWvpVrdjY/KyDvsTAoC6WQaMFdwb+zDnqlX5BZ4'
 )
+ON CONFLICT (username) DO NOTHING;
+
+INSERT INTO users (username, password_hash)
+SELECT u.username,
+    '$argon2id$v=19$m=19456,t=2,p=1$v2IEKdUJ6RrtwyNZukpOOw$ffLcHWvpVrdjY/KyDvsTAoC6WQaMFdwb+zDnqlX5BZ4'
+FROM (VALUES ('alice'), ('bob'), ('charlie'), ('diana'), ('eric')) AS u(username)
 ON CONFLICT (username) DO NOTHING;
 
 -- The demo user owns these organizations and must also be a member.
@@ -40,13 +47,36 @@ BEGIN
         VALUES (demo_user_id, demo_org_id)
         ON CONFLICT (user_id, org_id) DO NOTHING;
 
+        -- Each organization has its own member list; demo belongs to all three.
+        INSERT INTO user_organization (user_id, org_id)
+        SELECT u.id, demo_org_id
+        FROM (VALUES
+            ('Central Hospital', 'alice'),
+            ('Central Hospital', 'bob'),
+            ('Research Lab', 'charlie'),
+            ('Medical Network', 'diana'),
+            ('Medical Network', 'eric')
+        ) AS membership(organization_name, username)
+        JOIN users AS u ON u.username = membership.username
+        WHERE membership.organization_name = org_name
+        ON CONFLICT (user_id, org_id) DO NOTHING;
+
         INSERT INTO projects (
             org_id, created_by_user_id, name,
             input_mount_destination, output_mount_destination
         )
         SELECT demo_org_id, demo_user_id, p.name, '/data/input', '/data/output'
-        FROM (VALUES ('Model training'), ('Model evaluation')) AS p(name)
-        WHERE NOT EXISTS (
+        -- Each project row has one org_id and belongs to exactly one organization.
+        FROM (VALUES
+            ('Central Hospital', 'Patient risk prediction'),
+            ('Central Hospital', 'Medical image classification'),
+            ('Research Lab', 'Federated learning benchmark'),
+            ('Research Lab', 'Privacy-preserving model evaluation'),
+            ('Research Lab', 'Training algorithm comparison'),
+            ('Medical Network', 'Cross-hospital outcome prediction')
+        ) AS p(organization_name, name)
+        WHERE p.organization_name = org_name
+          AND NOT EXISTS (
             SELECT 1 FROM projects AS existing
             WHERE existing.org_id = demo_org_id AND existing.name = p.name
         );
