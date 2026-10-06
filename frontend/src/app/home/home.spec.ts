@@ -77,12 +77,13 @@ describe('Home organizations', () => {
     fixture.nativeElement.querySelector('.notifications-panel button').click();
     http.expectNone('/users/organizations');
     http.expectOne('/users/notifications').flush({ notifications: [
-      { id: 1, title: 'Welcome', is_read: false, created_at: Date.UTC(2026, 9, 4, 12, 30) },
+      { id: 1, title: 'Welcome', message: 'Changed training rounds from 3 to 5.', is_read: false, created_at: Date.UTC(2026, 9, 4, 12, 30) },
       { id: 2, title: 'Organizations ready', is_read: true, created_at: Date.UTC(2026, 9, 3, 9) },
     ] });
     await fixture.whenStable();
     const items = fixture.nativeElement.querySelectorAll('.notification-list li');
     expect(items[0].textContent).toContain('Welcome');
+    expect(items[0].textContent).toContain('Changed training rounds from 3 to 5.');
     expect(items[0].textContent).toContain('Unread');
     expect(items[0].classList.contains('unread')).toBe(true);
     expect(items[1].textContent).toContain('Read');

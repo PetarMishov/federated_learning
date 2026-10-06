@@ -92,6 +92,12 @@ button {
   font-weight: 400;
 }
 
+.notification-message {
+  margin: 8px 0;
+  font-size: 14px;
+  font-weight: 400;
+}
+
 .notifications-header {
   min-height: 34px;
   display: flex;

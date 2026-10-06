@@ -1,4 +1,5 @@
-// Proposed schema only. Permissions are seeded from code.
+// Logical schema. Executable definitions are in db/schema.sql.
+// Lifecycle constraints/functions are in db/deployment_rules.sql.
 // GitHub: GitHub App user authorization with read-only repository contents.
 // GitLab: OAuth authorization-code flow with repository read access.
 
@@ -59,6 +60,7 @@ Table roles {
 Table role_permission {
   role_id integer [not null]
   perm_id integer [not null]
+  scope permission_scope [not null, default: 'organization']
   indexes {
     (role_id, perm_id) [pk]
   }
@@ -67,7 +69,28 @@ Table role_permission {
 Table permissions {
   id integer [pk]
   name varchar [unique, not null]
+  scope permission_scope [not null]
+  indexes {
+    (id, scope) [unique]
+  }
   Note: 'Include edit_roles, edit_project, start_deployment, and participate_in_deployment. Participation permits and requires inspecting published contents before acceptance.'
+}
+
+Enum permission_scope {
+  organization
+  project
+}
+
+Table role_project_permission {
+  org_id integer [not null]
+  role_id integer [not null]
+  project_id integer [not null]
+  perm_id integer [not null]
+  scope permission_scope [not null, default: 'project']
+  indexes {
+    (role_id, project_id, perm_id) [pk]
+  }
+  Note: 'Role and project must belong to the same organization. Only project-scoped permissions belong here; role_permission holds edit_roles only.'
 }
 
 Enum provider_kind {
@@ -117,6 +140,7 @@ Table projects {
 Enum snapshot_source {
   github
   gitlab
+  local
   platform
 }
 
@@ -135,15 +159,16 @@ Table snapshots {
   indexes {
     (project_id, id) [unique]
   }
-  Note: 'Immutable entire-repository files at one revision, without .git/history, or platform-authored code. Files live in artifact storage. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
+  Note: 'Immutable exact project files at one revision, without .git/history. Files live in local artifact storage and hashes identify the archives. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
 }
 
 Enum run_status {
   pending
-  running
-  completed
-  failed
+  started
+  finished
   cancelled
+  failed
+  skipped
 }
 
 Table deployment_runs {
@@ -151,10 +176,14 @@ Table deployment_runs {
   org_id integer [not null]
   project_id integer [not null]
   snapshot_id integer [not null]
+  name text [not null, default: 'Deployment']
+  change_summary text [not null]
+  supersedes_run_id integer [unique]
+  terminal_reason text
+  cancelled_by_user_id integer
   created_by_user_id integer [not null]
   started_by_user_id integer
   status run_status [not null, default: 'pending']
-  configuration_revision integer [not null, default: 1]
   dockerfile_path varchar
   compose_file_path varchar
   build_context_path varchar [not null]
@@ -166,14 +195,24 @@ Table deployment_runs {
   coordinator_endpoint varchar
   created_at timestamp [not null]
   started_at timestamp
-  finished_at timestamp
-  Note: 'One execution per row; snapshot can be reused by new runs with fresh acceptance. Snapshot selection is immutable. While pending, shared execution changes atomically increment configuration_revision and clear every acceptance. Start atomically freezes settings and checks starter permission and each participant membership, permission, and accepted revision. Platform hosts coordinator; endpoint is not an authentication credential.'
+  ended_at timestamp
+  indexes {
+    (project_id, id) [unique]
+    (id, snapshot_id) [unique]
+  }
+  Note: 'Explicit pending updates create a replacement and skip the predecessor. Snapshot/settings remain immutable. Starter must join with at least one other participant. One remaining participant continues; zero cancels. Pending/started can be cancelled. Finished/failed/cancelled/skipped are terminal.'
 }
 
 Enum participation_status {
+  pending
   joined
-  withdrawn
-  revoked
+  removed
+}
+
+Enum removal_reason {
+  voluntary
+  permission_lost
+  unauthorized_behavior
 }
 
 Enum execution_status {
@@ -188,21 +227,21 @@ Enum execution_status {
 Table run_participants {
   run_id integer [not null]
   user_id integer [not null]
-  participation_status participation_status [not null, default: 'joined']
-  accepted_configuration_revision integer
+  participation_status participation_status [not null, default: 'pending']
+  accepted_snapshot_id integer
   accepted_at timestamp
-  local_input_path varchar [not null]
-  local_output_path varchar [not null]
+  local_input_path varchar
+  local_output_path varchar
   execution_status execution_status [not null, default: 'not_started']
-  joined_at timestamp [not null]
-  withdrawn_at timestamp
-  revoked_at timestamp
+  joined_at timestamp
+  removed_at timestamp
+  removal_reason removal_reason
   stop_requested_at timestamp
   stopped_at timestamp
   indexes {
     (run_id, user_id) [pk]
   }
-  Note: 'One hospital machine per participant. Acceptance is for this run and shared revision only; local path changes do not invalidate it. Input mount is read-only; output mount is writable. Datasets stay local. Withdrawal is allowed while pending. Membership or participation-permission loss revokes participation even during execution: reject coordinator updates and request local stop. Stop acknowledgment is separate because the machine may be offline. Enforce current membership in the run organization without deleting historical participation.'
+  Note: 'Pending users are eligible but have not accepted. Joined users accept this deployment snapshot. Joining/rejoining requires pending status. Removed covers voluntary departure, permission loss, or future unauthorized-behavior detection. Historical rows and stop acknowledgments survive termination. Local path edits do not invalidate shared acceptance.'
 }
 
 Ref: notifications.user_id > users.id
@@ -212,7 +251,10 @@ Ref: user_organization.org_id > organizations.id
 Ref: user_organization.(org_id, role_id) > roles.(org_id, id)
 Ref: roles.org_id > organizations.id
 Ref: role_permission.role_id > roles.id
-Ref: role_permission.perm_id > permissions.id
+Ref: role_permission.(perm_id, scope) > permissions.(id, scope)
+Ref: role_project_permission.(org_id, role_id) > roles.(org_id, id)
+Ref: role_project_permission.(org_id, project_id) > projects.(org_id, id)
+Ref: role_project_permission.(perm_id, scope) > permissions.(id, scope)
 Ref: provider_connections.user_id > users.id
 Ref: projects.org_id > organizations.id
 Ref: projects.created_by_user_id > users.id
@@ -222,5 +264,9 @@ Ref: deployment_runs.(org_id, project_id) > projects.(org_id, id)
 Ref: deployment_runs.(project_id, snapshot_id) > snapshots.(project_id, id)
 Ref: deployment_runs.created_by_user_id > users.id
 Ref: deployment_runs.started_by_user_id > users.id
+Ref: deployment_runs.cancelled_by_user_id > users.id
+Ref: deployment_runs.(project_id, supersedes_run_id) > deployment_runs.(project_id, id)
 Ref: run_participants.run_id > deployment_runs.id
 Ref: run_participants.user_id > users.id
+
+Ref: run_participants.(run_id, accepted_snapshot_id) > deployment_runs.(id, snapshot_id)

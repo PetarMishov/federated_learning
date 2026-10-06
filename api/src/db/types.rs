@@ -22,7 +22,8 @@ pub struct NotificationList {
 #[derive(Serialize)]
 pub struct Notification {
     pub id: i32,
-    pub title: String, //NOTE: title is content
+    pub title: String,
+    pub message: String,
     pub is_read: bool,
     pub created_at: f64,
 }

@@ -6,8 +6,8 @@ pub async fn get_user_notifications(
     pool: &PgPool,
     user_id: i32,
 ) -> Result<NotificationList, DBError> {
-    let rows = sqlx::query_as::<_, (i32, String, bool, f64)>(
-        "SELECT n.id, n.title, n.read_at IS NOT NULL AS is_read,
+    let rows = sqlx::query_as::<_, (i32, String, String, bool, f64)>(
+        "SELECT n.id, n.title, n.message, n.read_at IS NOT NULL AS is_read,
                 (EXTRACT(EPOCH FROM n.created_at) * 1000)::double precision AS created_at
          FROM notifications AS n
          WHERE n.user_id = $1
@@ -20,9 +20,10 @@ pub async fn get_user_notifications(
     Ok(NotificationList {
         notifications: rows
             .into_iter()
-            .map(|(id, title, is_read, created_at)| Notification {
+            .map(|(id, title, message, is_read, created_at)| Notification {
                 id,
                 title,
+                message,
                 is_read,
                 created_at,
             })

@@ -1,12 +1,16 @@
--- Initial PostgreSQL schema for a fresh database; not an upgrade migration.
+-- Current development schema. Run scripts/setup_db.sh on an empty database.
 -- Each user is one hospital machine account. Artifact contents and datasets
 -- are not stored in this database. Credentials must be encrypted by the app.
+\set ON_ERROR_STOP on
+
 BEGIN;
 
 CREATE TYPE provider_kind AS ENUM ('github', 'gitlab');
-CREATE TYPE snapshot_source AS ENUM ('github', 'gitlab', 'platform');
-CREATE TYPE run_status AS ENUM ('pending', 'running', 'completed', 'failed', 'cancelled');
-CREATE TYPE participation_status AS ENUM ('joined', 'withdrawn', 'revoked');
+CREATE TYPE snapshot_source AS ENUM ('github', 'gitlab', 'local', 'platform');
+CREATE TYPE run_status AS ENUM ('pending', 'started', 'finished', 'cancelled', 'failed', 'skipped');
+CREATE TYPE participation_status AS ENUM ('pending', 'joined', 'removed');
+CREATE TYPE removal_reason AS ENUM ('voluntary', 'permission_lost', 'unauthorized_behavior');
+CREATE TYPE permission_scope AS ENUM ('organization', 'project');
 CREATE TYPE execution_status AS ENUM (
     'not_started', 'starting', 'running', 'completed', 'failed', 'stopped'
 );
@@ -64,22 +68,28 @@ ALTER TABLE organizations ADD CONSTRAINT organizations_owner_membership_fk
 
 CREATE TABLE permissions (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name text NOT NULL UNIQUE
+    name text NOT NULL UNIQUE,
+    scope permission_scope NOT NULL,
+    UNIQUE (id, scope),
+    CHECK ((name = 'edit_roles' AND scope = 'organization')
+        OR (name IN ('edit_project', 'start_deployment', 'participate_in_deployment') AND scope = 'project'))
 );
 
 CREATE TABLE role_permission (
     role_id integer NOT NULL REFERENCES roles (id),
-    perm_id integer NOT NULL REFERENCES permissions (id),
+    perm_id integer NOT NULL,
+    scope permission_scope NOT NULL DEFAULT 'organization' CHECK (scope = 'organization'),
+    FOREIGN KEY (perm_id, scope) REFERENCES permissions (id, scope),
     PRIMARY KEY (role_id, perm_id)
 );
 
 -- Fixed permission catalog. The runtime database role should have SELECT only
--- on permissions; future catalog changes belong in migrations/code.
-INSERT INTO permissions (name) VALUES
-    ('edit_roles'),
-    ('edit_project'),
-    ('start_deployment'),
-    ('participate_in_deployment');
+-- on permissions; future catalog changes belong in this schema.
+INSERT INTO permissions (name, scope) VALUES
+    ('edit_roles', 'organization'),
+    ('edit_project', 'project'),
+    ('start_deployment', 'project'),
+    ('participate_in_deployment', 'project');
 
 CREATE TABLE provider_connections (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -120,6 +130,19 @@ CREATE TABLE projects (
 COMMENT ON TABLE projects IS
     'Editable defaults for future runs. Snapshot-relative paths and Docker/Compose options must be validated by the application. Updates do not silently change existing runs.';
 
+-- Project grants are scoped to a project in the role's own organization.
+CREATE TABLE role_project_permission (
+    org_id integer NOT NULL,
+    role_id integer NOT NULL,
+    project_id integer NOT NULL,
+    perm_id integer NOT NULL,
+    scope permission_scope NOT NULL DEFAULT 'project' CHECK (scope = 'project'),
+    PRIMARY KEY (role_id, project_id, perm_id),
+    FOREIGN KEY (org_id, role_id) REFERENCES roles (org_id, id),
+    FOREIGN KEY (org_id, project_id) REFERENCES projects (org_id, id),
+    FOREIGN KEY (perm_id, scope) REFERENCES permissions (id, scope)
+);
+
 CREATE TABLE snapshots (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     project_id integer NOT NULL REFERENCES projects (id),
@@ -132,21 +155,29 @@ CREATE TABLE snapshots (
     storage_key text NOT NULL UNIQUE,
     content_sha256 text NOT NULL CHECK (content_sha256 ~ '^[0-9a-fA-F]{64}$'),
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (project_id, id)
+    UNIQUE (project_id, id),
+    CONSTRAINT snapshot_relative_key CHECK (
+        storage_key ~ '^[a-zA-Z0-9][a-zA-Z0-9._/-]*$'
+        AND storage_key !~ '(^|/)\.\.(/|$)'
+    )
 );
 
 COMMENT ON TABLE snapshots IS
-    'Immutable entire-repository files without Git history, or platform-authored code. Restrict UPDATE in the runtime role and make artifacts immutable. Survives provider unlinking. Published through pending runs to eligible members.';
+    'Immutable exact project files in local artifact storage, outside frontend assets. Never modify a published snapshot. Source commit is provenance; content hash identifies the stored artifact. Local imports need no Git history.';
 
 CREATE TABLE deployment_runs (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     org_id integer NOT NULL,
     project_id integer NOT NULL,
     snapshot_id integer NOT NULL,
+    name text NOT NULL DEFAULT 'Deployment',
+    change_summary text NOT NULL DEFAULT '',
+    supersedes_run_id integer UNIQUE,
     created_by_user_id integer NOT NULL REFERENCES users (id),
     started_by_user_id integer REFERENCES users (id),
+    cancelled_by_user_id integer REFERENCES users (id),
     status run_status NOT NULL DEFAULT 'pending',
-    configuration_revision integer NOT NULL DEFAULT 1 CHECK (configuration_revision > 0),
+    terminal_reason text,
     dockerfile_path text,
     compose_file_path text,
     build_context_path text NOT NULL,
@@ -158,60 +189,67 @@ CREATE TABLE deployment_runs (
     coordinator_endpoint text,
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at timestamptz,
-    finished_at timestamptz,
+    ended_at timestamptz,
+    UNIQUE (project_id, id),
+    UNIQUE (id, snapshot_id),
     FOREIGN KEY (org_id, project_id) REFERENCES projects (org_id, id),
     FOREIGN KEY (project_id, snapshot_id) REFERENCES snapshots (project_id, id),
-    CONSTRAINT run_start_metadata CHECK (
-        (started_at IS NULL) = (started_by_user_id IS NULL)
+    FOREIGN KEY (project_id, supersedes_run_id) REFERENCES deployment_runs (project_id, id),
+    CONSTRAINT run_not_own_replacement CHECK (supersedes_run_id IS DISTINCT FROM id),
+    CONSTRAINT run_start_metadata CHECK ((started_at IS NULL) = (started_by_user_id IS NULL)),
+    CONSTRAINT run_execution_has_start CHECK (status NOT IN ('started', 'finished', 'failed') OR started_at IS NOT NULL),
+    CONSTRAINT run_unstarted_states CHECK (status NOT IN ('pending', 'skipped') OR started_at IS NULL),
+    CONSTRAINT run_end_metadata CHECK (
+        (status IN ('finished', 'cancelled', 'failed', 'skipped')) = (ended_at IS NOT NULL)
     ),
-    CONSTRAINT run_running_has_start CHECK (
-        status <> 'running' OR started_at IS NOT NULL
-    ),
-    CONSTRAINT run_pending_has_no_start CHECK (
-        status <> 'pending' OR (started_at IS NULL AND finished_at IS NULL)
-    ),
-    CONSTRAINT run_finish_after_start CHECK (
-        finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at
-    )
+    CONSTRAINT run_end_after_start CHECK (ended_at IS NULL OR ended_at >= COALESCE(started_at, created_at)),
+    CONSTRAINT run_start_after_creation CHECK (started_at IS NULL OR started_at >= created_at),
+    CONSTRAINT run_failure_reason CHECK (status <> 'failed' OR NULLIF(trim(terminal_reason), '') IS NOT NULL),
+    CONSTRAINT run_cancellation_metadata CHECK (cancelled_by_user_id IS NULL OR status = 'cancelled')
 );
 
 COMMENT ON TABLE deployment_runs IS
-    'One execution per row, using an immutable snapshot selection. While pending, shared configuration edits must atomically increment revision and clear every acceptance. Start must lock the run, freeze settings, and check current starter/participant permissions and accepted revisions. Platform hosts coordinator. New runs require fresh acceptance.';
+    'Pending publication captures a snapshot. Explicit updates create a replacement and skip the old deployment; joined users reaccept and are notified. Start requires the starter plus another joined participant. Losing one participant does not fail execution; losing all cancels it. Terminal states cannot restart.';
 
 CREATE TABLE run_participants (
     run_id integer NOT NULL REFERENCES deployment_runs (id),
     user_id integer NOT NULL REFERENCES users (id),
-    participation_status participation_status NOT NULL DEFAULT 'joined',
-    accepted_configuration_revision integer CHECK (accepted_configuration_revision > 0),
+    participation_status participation_status NOT NULL DEFAULT 'pending',
+    accepted_snapshot_id integer,
     accepted_at timestamptz,
-    local_input_path text NOT NULL,
-    local_output_path text NOT NULL,
+    local_input_path text,
+    local_output_path text,
     execution_status execution_status NOT NULL DEFAULT 'not_started',
-    joined_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    withdrawn_at timestamptz,
-    revoked_at timestamptz,
+    joined_at timestamptz,
+    removed_at timestamptz,
+    removal_reason removal_reason,
     stop_requested_at timestamptz,
     stopped_at timestamptz,
     PRIMARY KEY (run_id, user_id),
-    CONSTRAINT participant_acceptance_pair CHECK (
-        (accepted_configuration_revision IS NULL) = (accepted_at IS NULL)
-    ),
-    CONSTRAINT participant_withdrawal_recorded CHECK (
-        participation_status <> 'withdrawn' OR withdrawn_at IS NOT NULL
-    ),
-    CONSTRAINT participant_revocation_recorded CHECK (
-        participation_status <> 'revoked' OR revoked_at IS NOT NULL
+    FOREIGN KEY (run_id, accepted_snapshot_id) REFERENCES deployment_runs (id, snapshot_id),
+    CONSTRAINT participant_acceptance_pair CHECK ((accepted_snapshot_id IS NULL) = (accepted_at IS NULL)),
+    CONSTRAINT participant_joined_metadata CHECK (participation_status <> 'joined' OR (
+        accepted_at IS NOT NULL AND joined_at IS NOT NULL
+        AND NULLIF(trim(local_input_path), '') IS NOT NULL AND NULLIF(trim(local_output_path), '') IS NOT NULL
+    )),
+    CONSTRAINT participant_pending_metadata CHECK (participation_status <> 'pending' OR (
+        accepted_at IS NULL AND joined_at IS NULL AND execution_status = 'not_started'
+    )),
+    CONSTRAINT participant_removal_metadata CHECK (
+        (participation_status = 'removed') = (removed_at IS NOT NULL AND removal_reason IS NOT NULL)
+        AND ((removed_at IS NULL) = (removal_reason IS NULL))
     )
 );
 
 COMMENT ON TABLE run_participants IS
-    'Acceptance covers one run and shared revision, not local paths. Mount input read-only and output writable; datasets stay local. Check current membership and participation permission in the run organization. Revocation rejects coordinator updates and requests local stop; record stop acknowledgment separately. Keep historical records after membership removal.';
+    'Pending means eligible and not accepted. Joined accepts this deployment snapshot/settings. Removed retains a voluntary/system reason; eligible users can rejoin only while pending. Local path changes do not invalidate acceptance. System removal and voluntary departure preserve history and request local stop; acknowledgment is separate.';
 
 -- PostgreSQL does not automatically index the referencing side of foreign keys.
 CREATE INDEX notifications_user_created_idx ON notifications (user_id, created_at DESC);
 CREATE INDEX organizations_owner_idx ON organizations (owner_user_id);
 CREATE INDEX memberships_org_role_idx ON user_organization (org_id, role_id);
 CREATE INDEX role_permission_permission_idx ON role_permission (perm_id);
+CREATE INDEX project_grants_project_idx ON role_project_permission (project_id, role_id);
 CREATE INDEX projects_creator_idx ON projects (created_by_user_id);
 CREATE INDEX snapshots_creator_idx ON snapshots (created_by_user_id);
 CREATE INDEX runs_project_snapshot_idx ON deployment_runs (project_id, snapshot_id);
@@ -220,14 +258,12 @@ CREATE INDEX runs_creator_idx ON deployment_runs (created_by_user_id);
 CREATE INDEX runs_starter_idx ON deployment_runs (started_by_user_id);
 CREATE INDEX participants_user_idx ON run_participants (user_id);
 
--- Application responsibilities (not inferred from a database connection):
--- * Only the current owner may transfer ownership; owners implicitly have all permissions.
--- * Role editors may grant only permissions they possess.
--- * Permission/membership loss revokes affected participation, including running jobs.
--- * Synchronize acceptance/configuration/start operations by locking the run first.
--- * Participants may withdraw while pending; local path changes preserve acceptance.
--- * Set updated_at explicitly on updates to projects and provider_connections.
--- * Use a restricted runtime DB role, separate from the schema/migration owner.
--- Foreign keys use NO ACTION intentionally to preserve history and avoid implicit
--- deletion of runs, snapshots, or participants; deletion needs an explicit policy.
+-- Deployment functions and triggers are kept together in one rules file.
+\ir deployment_rules.sql
+
+-- Runtime services must authenticate actors, validate file paths, safely store
+-- snapshots before publication, and authorize system removal. SQL actor IDs must
+-- come from verified sessions, never client-supplied identity. Stop requests need
+-- coordinator/local-agent handling; unauthorized-behavior detection is future work.
+-- Restrict the runtime role's direct writes to lifecycle tables and snapshot files.
 COMMIT;

@@ -44,6 +44,9 @@
           @for (notification of notifications(); track notification.id) {
             <li [class.unread]="!notification.is_read">
               {{ notification.title }}
+              @if (notification.message) {
+                <p class="notification-message">{{ notification.message }}</p>
+              }
               <time class="created-at" [attr.datetime]="(notification.created_at | date:'yyyy-MM-ddTHH:mm:ss.SSS':'+0000') + 'Z'">
                 {{ notification.created_at | date:'medium' }}
               </time>

@@ -61,7 +61,7 @@ For more information on using the Angular CLI, including detailed command refere
 ## API connection
 
 Run the Rust API on port 3000 and this frontend with `npm start`. The development
-proxy forwards `/users/**` to the API. Both the API and the PostgreSQL startup
+proxy forwards `/users/**` and the organization project/member endpoints to the API. Both the API and the PostgreSQL startup
 script use the root `.env`; no `api/.env` copy is needed.
 
 The initial page is `/login`, without a sidebar. Sign in with `demo` /
@@ -74,11 +74,9 @@ PostgreSQL, clears the browser session, and returns to login. Network failures
 keep the session available so logout can be retried. Each login gets a unique
 JWT identifier. Tokens issued before this change require signing in again.
 
-For an existing database, apply `migrations/add_revoked_tokens.sql` before
-starting the updated API. Fresh databases include this table in `schema.sql`.
-The table stores only revoked token identifiers and expiry timestamps, not
-bearer tokens. Revocations survive API restarts.
+For database setup and population, see [db/README.md](../db/README.md).
+The current schema includes the revoked-token table, which stores identifiers
+and expiry timestamps rather than bearer tokens. Revocations survive API restarts.
 
 For production hosting, route `/users/**` to the API through your web server;
-the Angular development proxy is only used by `ng serve`. Notifications remain
-a placeholder.
+the Angular development proxy is only used by `ng serve`. Notifications load from the API.
