@@ -45,8 +45,19 @@ ul {
 }
 
 li {
-  padding: 0 0 16px;
+  padding: 16px 0;
   border-bottom: 1px solid #ddd;
+}
+
+li:first-child {
+  padding-top: 0;
+}
+
+button {
+  padding: 8px 12px;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+  background: white;
 }
 
 @media (max-width: 1000px) {

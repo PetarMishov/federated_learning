@@ -2,10 +2,21 @@
 <div class="organization-panels">
   <section aria-labelledby="projects-heading">
     <h2 id="projects-heading">Projects</h2>
-    <div class="panel">
-      <ul>
-        <li>No projects to show yet.</li>
-      </ul>
+    <div class="panel projects-panel" [attr.aria-busy]="loading()">
+      @if (loading()) {
+        <p role="status">Loading projects…</p>
+      } @else if (error()) {
+        <p role="alert">{{ error() }}</p>
+        <button type="button" (click)="loadProjects()">Try again</button>
+      } @else {
+        <ul>
+          @for (project of projects(); track project.id) {
+            <li>{{ project.name }}</li>
+          } @empty {
+            <li>No projects to show yet.</li>
+          }
+        </ul>
+      }
     </div>
   </section>
   <section aria-labelledby="deployments-heading">

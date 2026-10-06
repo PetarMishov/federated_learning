@@ -2,5 +2,9 @@
   "^/users(?:/|$)": {
     "target": "http://127.0.0.1:3000",
     "secure": false
+  },
+  "^/organizations/[0-9]+/projects$": {
+    "target": "http://127.0.0.1:3000",
+    "secure": false
   }
 }

@@ -39,3 +39,16 @@ pub struct Project {
     pub created_by_user_id: i32,
     pub name: String,
 }
+
+#[derive(Serialize)]
+pub struct MemberList {
+    pub members: Vec<Member>,
+}
+
+#[derive(Serialize)]
+pub struct Member {
+    pub id: i32,
+    pub username: String,
+    pub role_id: Option<i32>,
+    pub role_name: Option<String>,
+}

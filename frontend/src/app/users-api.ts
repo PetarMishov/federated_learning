@@ -12,6 +12,17 @@ export interface OrganizationList {
   organizations: Organization[];
 }
 
+export interface Project {
+  id: number;
+  org_id: number;
+  created_by_user_id: number;
+  name: string;
+}
+
+export interface ProjectList {
+  projects: Project[];
+}
+
 export interface Notification {
   id: number;
   title: string;
@@ -54,6 +65,12 @@ export class UsersApi {
 
   getNotifications() {
     return this.http.get<NotificationList>('/users/notifications', {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getOrganizationProjects(orgId: string) {
+    return this.http.get<ProjectList>(`/organizations/${encodeURIComponent(orgId)}/projects`, {
       headers: { Authorization: `Bearer ${this.token()}` },
     });
   }

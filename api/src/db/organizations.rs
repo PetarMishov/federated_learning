@@ -1,17 +1,49 @@
-use super::types::{DBError, Project, ProjectList};
+use super::types::{DBError, Member, MemberList, Project, ProjectList};
 use sqlx::PgPool;
+
+pub async fn get_organization_members(
+    pool: &PgPool,
+    org_id: i32,
+    user_id: i32,
+) -> Result<MemberList, DBError> {
+    // Verify the caller's membership within the same statement that reads members.
+    let rows = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>)>(
+        "SELECT u.id, u.username, m.role_id, r.name
+         FROM user_organization AS caller
+         JOIN user_organization AS m ON m.org_id = caller.org_id
+         JOIN users AS u ON u.id = m.user_id
+         LEFT JOIN roles AS r ON r.org_id = m.org_id AND r.id = m.role_id
+         WHERE caller.org_id = $1 AND caller.user_id = $2
+         ORDER BY u.username, u.id",
+    )
+    .bind(org_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(MemberList {
+        members: rows
+            .into_iter()
+            .map(|(id, username, role_id, role_name)| Member {
+                id,
+                username,
+                role_id,
+                role_name,
+            })
+            .collect(),
+    })
+}
 
 pub async fn get_organization_projects(
     pool: &PgPool,
     org_id: i32,
     user_id: i32,
-) -> Result<Option<ProjectList>, DBError> {
+) -> Result<ProjectList, DBError> {
     // Check membership and read projects from the same database snapshot.
-    // The left join distinguishes an empty organization from inaccessible projects.
-    let rows = sqlx::query_as::<_, (Option<i32>, Option<i32>, Option<i32>, Option<String>)>(
+    let rows = sqlx::query_as::<_, (i32, i32, i32, String)>(
         "SELECT p.id, p.org_id, p.created_by_user_id, p.name
          FROM user_organization AS membership
-         LEFT JOIN projects AS p ON p.org_id = membership.org_id
+         JOIN projects AS p ON p.org_id = membership.org_id
          WHERE membership.org_id = $1 AND membership.user_id = $2
          ORDER BY p.name, p.id",
     )
@@ -20,21 +52,16 @@ pub async fn get_organization_projects(
     .fetch_all(pool)
     .await?;
 
-    if rows.is_empty() {
-        return Ok(None);
-    }
     let projects = rows
         .into_iter()
-        .filter_map(|(id, org_id, created_by_user_id, name)| {
-            Some(Project {
-                id: id?,
-                org_id: org_id?,
-                created_by_user_id: created_by_user_id?,
-                name: name?,
-            })
+        .map(|(id, org_id, created_by_user_id, name)| Project {
+            id,
+            org_id,
+            created_by_user_id,
+            name,
         })
         .collect();
-    Ok(Some(ProjectList { projects }))
+    Ok(ProjectList { projects })
 }
 
 #[cfg(test)]
@@ -56,7 +83,6 @@ mod tests {
         .unwrap();
         let result = get_organization_projects(&pool, org_id, user_id)
             .await
-            .unwrap()
             .unwrap();
         let expected = sqlx::query_as::<_, (i32, String)>(
             "SELECT id, name FROM projects WHERE org_id = $1 ORDER BY name, id",
@@ -80,13 +106,15 @@ mod tests {
             get_organization_projects(&pool, org_id, outsider)
                 .await
                 .unwrap()
-                .is_none()
+                .projects
+                .is_empty()
         );
         assert!(
             get_organization_projects(&pool, -1, user_id)
                 .await
                 .unwrap()
-                .is_none()
+                .projects
+                .is_empty()
         );
         pool.close().await;
     }
