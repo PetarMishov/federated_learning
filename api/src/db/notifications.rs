@@ -29,3 +29,19 @@ pub async fn get_user_notifications(
             .collect(),
     })
 }
+
+pub async fn read_user_notifications(
+    pool: &PgPool,
+    user_id: i32,
+) -> Result<(), DBError> {
+    sqlx::query(
+        "UPDATE notifications
+         SET read_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1 AND read_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

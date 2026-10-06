@@ -1,6 +1,7 @@
 mod get_user_notifications;
 mod get_user_organizations;
 mod logout;
+mod read_notifications;
 mod types;
 mod verify_user;
 
@@ -22,5 +23,9 @@ pub fn users_router() -> Router<AppState> {
         .route(
             "/notifications",
             get(get_user_notifications::get_user_notifications_request),
+        )
+        .route(
+            "/read_notifications",
+            post(read_notifications::read_notifications_request),
         )
 }
