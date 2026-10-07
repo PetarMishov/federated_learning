@@ -1,14 +1,23 @@
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use crate::state::AppState;
 
+mod create_project;
 mod get_project_deployments;
 
 pub fn projects_router() -> Router<AppState> {
-    Router::new().route(
-        "/{proj_id}/deployments",
-        get(get_project_deployments::get_project_deployments_request),
-    )
+    Router::new()
+        .route(
+            "/organizations/{org_id}/projects",
+            post(create_project::create_project_request),
+        )
+        .route(
+            "/projects/{proj_id}/deployments",
+            get(get_project_deployments::get_project_deployments_request),
+        )
 }
 
 #[cfg(test)]
@@ -29,9 +38,7 @@ mod tests {
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
         };
-        let app = Router::new()
-            .nest("/projects", projects_router())
-            .with_state(state);
+        let app = Router::new().merge(projects_router()).with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

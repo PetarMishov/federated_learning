@@ -17,9 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::create_pool(options).await?;
 
     let router: Router = Router::new()
-        .nest("/users", routers::users_router())
-        .nest("/organizations", routers::organizations_router())
-        .nest("/projects", routers::projects_router())
+        .merge(routers::users_router())
+        .merge(routers::organizations_router())
+        .merge(routers::projects_router())
         .fallback(not_found)
         .with_state(state::AppState {
             pool: pool.clone(),

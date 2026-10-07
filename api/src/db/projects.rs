@@ -1,5 +1,38 @@
-use super::types::{DBError, Deployment, DeploymentList};
+use super::types::{DBError, Deployment, DeploymentList, Project};
 use sqlx::PgPool;
+
+pub async fn create_project(
+    pool: &PgPool,
+    org_id: i32,
+    user_id: i32,
+    name: &str,
+) -> Result<Option<Project>, DBError> {
+    // Lock authorization rows until insertion finishes, so membership and
+    // ownership cannot change between permission checking and creation.
+    let row = sqlx::query_as::<_, (i32, i32, i32, String)>(
+        "WITH authorized_organization AS (
+             SELECT o.id FROM organizations o
+             JOIN user_organization m ON m.org_id = o.id AND m.user_id = $2
+             WHERE o.id = $1 AND o.owner_user_id = $2
+             FOR SHARE OF o, m
+         )
+         INSERT INTO projects (org_id, created_by_user_id, name,
+                               input_mount_destination, output_mount_destination)
+         SELECT id, $2, $3, '/data/input', '/data/output' FROM authorized_organization
+         RETURNING id, org_id, created_by_user_id, name",
+    )
+    .bind(org_id)
+    .bind(user_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id, org_id, created_by_user_id, name)| Project {
+        id,
+        org_id,
+        created_by_user_id,
+        name,
+    }))
+}
 
 pub async fn get_project_deployments(
     pool: &PgPool,

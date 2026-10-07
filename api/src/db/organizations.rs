@@ -1,5 +1,33 @@
-use super::types::{DBError, Member, MemberList, Project, ProjectList};
+use super::types::{DBError, Member, MemberList, Organization, Project, ProjectList};
 use sqlx::PgPool;
+
+pub async fn create_organization(
+    pool: &PgPool,
+    user_id: i32,
+    name: &str,
+) -> Result<Organization, DBError> {
+    // Ownership requires membership; the deferred FK is checked at commit.
+    let mut transaction = pool.begin().await?;
+    let (id, name, owner_user_id) = sqlx::query_as::<_, (i32, String, i32)>(
+        "INSERT INTO organizations (name, owner_user_id)
+         VALUES ($1, $2) RETURNING id, name, owner_user_id",
+    )
+    .bind(name)
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    sqlx::query("INSERT INTO user_organization (user_id, org_id) VALUES ($1, $2)")
+        .bind(user_id)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(Organization {
+        id,
+        name,
+        owner_user_id,
+    })
+}
 
 pub async fn get_organization_members(
     pool: &PgPool,

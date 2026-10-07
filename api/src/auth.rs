@@ -28,7 +28,7 @@ pub async fn authenticated_claims(
         return Err(unauthorized);
     }
 
-    let claims = verify_user_token(token, &state).map_err(|_| unauthorized)?;
+    let claims = verify_user_token(token, state).map_err(|_| unauthorized)?;
     let user_id = claims.sub.parse::<i32>().map_err(|_| unauthorized)?;
     if user_id <= 0 {
         return Err(unauthorized);
