@@ -1,4 +1,29 @@
-# API creation endpoints
+# API endpoints
+
+## Project members
+
+`GET /projects/{proj_id}/members` requires a valid bearer token and returns:
+
+```json
+{"members": [{"id": 1, "username": "alice", "role_id": 2, "role_name": "Coordinator"}]}
+```
+
+Members are the organization owner plus current organization members whose roles
+have at least one permission on this project. Users appear once even when their
+role grants multiple permissions, sorted by username and ID. Role fields may be
+null, including for an owner with no assigned role. This list is separate from
+deployment participation.
+
+Any current member of the project's organization can read the list. A caller
+outside that organization, or a nonexistent project, receives an empty list,
+matching the existing list endpoints. Invalid or revoked tokens return `401`;
+database failures return `500`.
+
+The frontend loads this list when the project page's Members drawer opens,
+refreshes it on reopening, and offers retry on errors. The development proxy
+forwards `/projects/{id}/members` to the API.
+
+## Creation
 
 Both endpoints require `Authorization: Bearer <token>` and
 `Content-Type: application/json`. Ownership and creator IDs come from the verified

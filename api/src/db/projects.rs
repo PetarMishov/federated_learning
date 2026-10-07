@@ -1,5 +1,45 @@
-use super::types::{DBError, Deployment, DeploymentList, Project};
+use super::types::{DBError, Deployment, DeploymentList, Member, MemberList, Project};
 use sqlx::PgPool;
+
+pub async fn get_project_members(
+    pool: &PgPool,
+    proj_id: i32,
+    user_id: i32,
+) -> Result<MemberList, DBError> {
+    // Authorize the reader and select current project members in one statement.
+    // EXISTS avoids duplicate users when their role has several project grants.
+    let rows = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>)>(
+        "SELECT u.id, u.username, m.role_id, r.name
+         FROM projects p
+         JOIN organizations o ON o.id = p.org_id
+         JOIN user_organization caller ON caller.org_id = p.org_id AND caller.user_id = $2
+         JOIN user_organization m ON m.org_id = p.org_id
+         JOIN users u ON u.id = m.user_id
+         LEFT JOIN roles r ON r.org_id = m.org_id AND r.id = m.role_id
+         WHERE p.id = $1 AND (
+             u.id = o.owner_user_id OR EXISTS (
+                 SELECT 1 FROM role_project_permission g
+                 WHERE g.org_id = p.org_id AND g.project_id = p.id AND g.role_id = m.role_id
+             )
+         )
+         ORDER BY u.username, u.id",
+    )
+    .bind(proj_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(MemberList {
+        members: rows
+            .into_iter()
+            .map(|(id, username, role_id, role_name)| Member {
+                id,
+                username,
+                role_id,
+                role_name,
+            })
+            .collect(),
+    })
+}
 
 pub async fn create_project(
     pool: &PgPool,

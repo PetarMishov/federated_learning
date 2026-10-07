@@ -4,7 +4,7 @@ import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
-import { Deployment, UsersApi } from '../users-api';
+import { Deployment, Member, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-project',
@@ -18,6 +18,10 @@ export class ProjectPage implements OnInit {
   private readonly api = inject(UsersApi);
   private readonly destroyRef = inject(DestroyRef);
   private readonly retryDeployments = new Subject<void>();
+  private readonly retryMembers = new Subject<void>();
+  protected readonly members = signal<Member[]>([]);
+  protected readonly membersLoading = signal(false);
+  protected readonly membersError = signal('');
   protected readonly deployments = signal<Deployment[]>([]);
   protected readonly deploymentsLoading = signal(false);
   protected readonly deploymentsError = signal('');
@@ -28,6 +32,35 @@ export class ProjectPage implements OnInit {
   });
 
   ngOnInit() {
+    this.route.paramMap.pipe(
+      switchMap((params) => this.retryMembers.pipe(
+        startWith(undefined),
+        switchMap(() => {
+          this.members.set([]);
+          this.membersError.set('');
+          this.membersLoading.set(false);
+          if (this.drawer() !== 'members') return EMPTY;
+          this.membersLoading.set(true);
+          return this.api.getProjectMembers(params.get('id') ?? '').pipe(
+            tap((result) => this.members.set(result.members)),
+            catchError((error: HttpErrorResponse) => {
+              if (error.status === 401) {
+                this.api.clearSession();
+                void this.router.navigateByUrl('/login');
+              } else {
+                this.membersError.set(error.status === 404
+                  ? 'Project not found.'
+                  : 'Could not load members. Please try again.');
+              }
+              return EMPTY;
+            }),
+            finalize(() => this.membersLoading.set(false)),
+          );
+        }),
+      )),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe();
+
     this.route.paramMap.pipe(
       switchMap((params) => this.retryDeployments.pipe(
         startWith(undefined),
@@ -58,5 +91,18 @@ export class ProjectPage implements OnInit {
 
   protected loadDeployments() {
     if (!this.deploymentsLoading()) this.retryDeployments.next();
+  }
+
+  protected toggleMembers() {
+    if (this.drawer() === 'members') {
+      this.drawer.set(null);
+    } else {
+      this.drawer.set('members');
+      this.retryMembers.next();
+    }
+  }
+
+  protected loadMembers() {
+    if (!this.membersLoading()) this.retryMembers.next();
   }
 }

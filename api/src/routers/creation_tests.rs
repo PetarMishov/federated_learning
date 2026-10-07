@@ -87,6 +87,21 @@ async fn creation_routes_reject_missing_and_forged_credentials() {
 }
 
 #[tokio::test]
+async fn project_members_route_rejects_missing_and_forged_credentials() {
+    let (address, server) =
+        serve(PgPool::connect_lazy("postgres://localhost/unused").unwrap()).await;
+    for token in [None, Some("forged-token")] {
+        assert_eq!(
+            request(address, "GET", "/projects/1/members", Value::Null, token)
+                .await
+                .0,
+            401
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL and permission to create a temporary schema"]
 async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     let url = std::env::var("TEST_DATABASE_URL").unwrap();
@@ -123,6 +138,7 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     // Run assertions in a task so a failed assertion still allows schema cleanup.
     let result = tokio::spawn(async move {
         check_creation(address, &check_pool).await;
+        check_project_members(address, &check_pool).await;
     })
     .await;
     server.abort();
@@ -133,6 +149,145 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
         .unwrap();
     admin.close().await;
     result.unwrap();
+}
+
+async fn check_project_members(address: SocketAddr, pool: &PgPool) {
+    let mut users = Vec::new();
+    for username in [
+        "project-owner",
+        "project-editor",
+        "project-participant",
+        "project-unassigned",
+        "project-outsider",
+    ] {
+        users.push(
+            sqlx::query_scalar::<_, i32>(
+                "INSERT INTO users (username, password_hash) VALUES ($1, 'unused') RETURNING id",
+            )
+            .bind(username)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        );
+    }
+    let owner = users[0];
+    let organization =
+        crate::db::organizations::create_organization(pool, owner, "Members fixture")
+            .await
+            .unwrap();
+    let project =
+        crate::db::projects::create_project(pool, organization.id, owner, "Members fixture")
+            .await
+            .unwrap()
+            .unwrap();
+    let other_project =
+        crate::db::projects::create_project(pool, organization.id, owner, "Other project")
+            .await
+            .unwrap()
+            .unwrap();
+    let role = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO roles (org_id, name) VALUES ($1, 'Editor') RETURNING id",
+    )
+    .bind(organization.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let participant_role = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO roles (org_id, name) VALUES ($1, 'Participant') RETURNING id",
+    )
+    .bind(organization.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let unassigned_role = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO roles (org_id, name) VALUES ($1, 'Other project editor') RETURNING id",
+    )
+    .bind(organization.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    for (user, role) in [
+        (users[1], role),
+        (users[2], participant_role),
+        (users[3], unassigned_role),
+    ] {
+        sqlx::query("INSERT INTO user_organization (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+            .bind(organization.id)
+            .bind(user)
+            .bind(role)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO role_project_permission (org_id, role_id, project_id, perm_id)
+                 SELECT $1, $2, $3, id FROM permissions WHERE name IN ('edit_project', 'start_deployment')")
+        .bind(organization.id).bind(role).bind(project.id).execute(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO role_project_permission (org_id, role_id, project_id, perm_id)
+                 SELECT $1, $2, $3, id FROM permissions WHERE name = 'participate_in_deployment'",
+    )
+    .bind(organization.id)
+    .bind(participant_role)
+    .bind(project.id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO role_project_permission (org_id, role_id, project_id, perm_id)
+                 SELECT $1, $2, $3, id FROM permissions WHERE name = 'edit_project'",
+    )
+    .bind(organization.id)
+    .bind(unassigned_role)
+    .bind(other_project.id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let path = format!("/projects/{}/members", project.id);
+    for reader in [owner, users[1], users[3]] {
+        let (status, body) =
+            request(address, "GET", &path, Value::Null, Some(&token(reader))).await;
+        assert_eq!(status, 200, "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let members = body["members"].as_array().unwrap();
+        assert_eq!(members.len(), 3);
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member["username"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["project-editor", "project-owner", "project-participant"]
+        );
+        assert_eq!(members[0]["role_name"], "Editor");
+        assert!(members[1]["role_id"].is_null());
+        assert_eq!(members[2]["role_name"], "Participant");
+    }
+    for (path, reader) in [
+        (path.clone(), users[4]),
+        ("/projects/2147483647/members".into(), owner),
+    ] {
+        let (status, body) =
+            request(address, "GET", &path, Value::Null, Some(&token(reader))).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({"members": []})
+        );
+    }
+    // Revoking the project's grant removes a current member from the list.
+    sqlx::query("DELETE FROM role_project_permission WHERE role_id = $1 AND project_id = $2")
+        .bind(participant_role)
+        .bind(project.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (_, body) = request(address, "GET", &path, Value::Null, Some(&token(owner))).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["members"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 async fn check_creation(address: SocketAddr, pool: &PgPool) {

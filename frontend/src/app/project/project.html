@@ -2,7 +2,7 @@
   <h1>{{ queryParams().get('name') || 'Project' }}</h1>
   <div class="project-actions">
     <button type="button" aria-controls="project-drawer" [attr.aria-expanded]="drawer() === 'members'"
-      (click)="drawer.set(drawer() === 'members' ? null : 'members')">Members</button>
+      (click)="toggleMembers()">Members</button>
     <button type="button" aria-controls="project-drawer" [attr.aria-expanded]="drawer() === 'deployments'"
       (click)="drawer.set(drawer() === 'deployments' ? null : 'deployments')">Deployments</button>
   </div>
@@ -54,7 +54,27 @@
         <button type="button" (click)="drawer.set(null)" aria-label="Close side drawer">Close</button>
       </div>
       @if (drawer() === 'members') {
-        <p>No members to show yet.</p>
+        <div aria-live="polite" [attr.aria-busy]="membersLoading()">
+          @if (membersLoading()) {
+            <p role="status">Loading members...</p>
+          } @else if (membersError()) {
+            <p role="alert">{{ membersError() }}</p>
+            <button type="button" (click)="loadMembers()">Try again</button>
+          } @else {
+            <ul>
+              @for (member of members(); track member.id) {
+                <li>
+                  {{ member.username }}
+                  @if (member.role_name) {
+                    <p>{{ member.role_name }}</p>
+                  }
+                </li>
+              } @empty {
+                <li>No members to show yet.</li>
+              }
+            </ul>
+          }
+        </div>
       } @else {
         <div aria-live="polite">
           @if (deploymentsLoading()) {

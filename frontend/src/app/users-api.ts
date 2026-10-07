@@ -116,6 +116,12 @@ export class UsersApi {
     });
   }
 
+  getProjectMembers(projectId: string) {
+    return this.http.get<MemberList>(`/projects/${encodeURIComponent(projectId)}/members`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
   markAllNotificationsAsRead() {
     return this.http.post<void>('/users/read_notifications', null, {
       headers: { Authorization: `Bearer ${this.token()}` },

@@ -7,6 +7,7 @@ use crate::state::AppState;
 
 mod create_project;
 mod get_project_deployments;
+mod get_project_members;
 
 pub fn projects_router() -> Router<AppState> {
     Router::new()
@@ -17,6 +18,10 @@ pub fn projects_router() -> Router<AppState> {
         .route(
             "/projects/{proj_id}/deployments",
             get(get_project_deployments::get_project_deployments_request),
+        )
+        .route(
+            "/projects/{proj_id}/members",
+            get(get_project_members::get_project_members_request),
         )
 }
 
