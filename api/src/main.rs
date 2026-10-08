@@ -1,4 +1,5 @@
 mod auth;
+mod connectors;
 mod db;
 pub mod git;
 mod routers;
