@@ -270,7 +270,10 @@ impl GitClient {
                 path: if path.is_empty() {
                     entry.name.clone()
                 } else {
-                    format!("{path}/{}", entry.name)
+                    let mut entry_path = path.to_owned();
+                    entry_path.push('/');
+                    entry_path.push_str(&entry.name);
+                    entry_path
                 },
                 name: entry.name,
                 kind: entry.kind,
