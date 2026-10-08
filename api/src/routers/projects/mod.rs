@@ -77,7 +77,6 @@ mod tests {
         for (method, suffix) in [
             ("POST", ""),
             ("GET", ""),
-            ("GET", "/7"),
             ("GET", "/7/tree?path=src"),
             ("GET", "/7/file?path=train.py"),
             ("GET", "/7/archive"),

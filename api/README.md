@@ -84,6 +84,44 @@ TEST_DATABASE_URL='<postgres connection URL>' cargo test \
   creation_endpoints_persist_membership_and_enforce_project_ownership -- --ignored
 ```
 
+## Snapshot metadata
+
+`GET /projects/{proj_id}/snapshots/{snapshot_id}` requires a valid bearer token.
+The organization owner or a current organization member with a permission grant
+for this project can read the snapshot. Organization membership alone is insufficient.
+The snapshot must belong to the project named in the URL.
+
+Successful requests return `200` with:
+
+```json
+{
+  "id": 7,
+  "project_id": 42,
+  "created_by_user_id": 1,
+  "source": "local",
+  "source_branch": null,
+  "source_commit_sha": null,
+  "git_commit_sha": "0123456789abcdef0123456789abcdef01234567",
+  "created_at": 1790812800000.0
+}
+```
+
+`created_at` is Unix time in milliseconds, matching deployment responses.
+External branch and commit provenance may be null and is separate from the stored
+Git commit ID. This endpoint reads metadata from the database; it does not read
+file contents or verify Git storage. Repository URLs and provider credentials are
+not included in the response.
+
+Missing, invalid, or revoked credentials return `401`. Missing snapshots,
+wrong-project IDs, and callers without project access all return the same `404`.
+Database failures return `500` without exposing internal errors.
+
+On the frontend project page, open **Deployments** and choose **View snapshot**.
+The details card loads this endpoint on demand and shows the saved date, source,
+and stored commit ID, plus original branch/commit when available. It supports
+retry and close, cancels requests when switching projects or snapshots, and
+returns to login on an expired session. File browsing remains future work.
+
 ## Snapshot placeholders
 
 These routes are registered and return `501 Not Implemented`. Each handler has its
@@ -94,7 +132,6 @@ permission checks, pagination, uploads, and Git reads remain TODOs.
 | --- | --- |
 | `POST /projects/{proj_id}/snapshots` | Save a complete file tree as an immutable Git snapshot |
 | `GET /projects/{proj_id}/snapshots` | List snapshot metadata with pagination |
-| `GET /projects/{proj_id}/snapshots/{snapshot_id}` | Read snapshot metadata |
 | `GET /projects/{proj_id}/snapshots/{snapshot_id}/tree?path=...` | List a directory at the saved commit |
 | `GET /projects/{proj_id}/snapshots/{snapshot_id}/file?path=...` | Read or download one file |
 | `GET /projects/{proj_id}/snapshots/{snapshot_id}/archive` | Generate a download of the complete saved file tree |

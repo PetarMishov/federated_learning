@@ -41,6 +41,18 @@ pub struct Project {
     pub name: String,
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Snapshot {
+    pub id: i32,
+    pub project_id: i32,
+    pub created_by_user_id: i32,
+    pub source: String,
+    pub source_branch: Option<String>,
+    pub source_commit_sha: Option<String>,
+    pub git_commit_sha: String,
+    pub created_at: f64,
+}
+
 #[derive(Serialize)]
 pub struct MemberList {
     pub members: Vec<Member>,

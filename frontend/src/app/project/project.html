@@ -8,7 +8,7 @@
   </div>
 </header>
 <section class="snapshot-controls" aria-labelledby="snapshot-heading">
-  <h2 id="snapshot-heading">Selected snapshot</h2>
+  <h2 id="snapshot-heading">Import project</h2>
       <div class="snapshot-sources" role="group" aria-label="Snapshot source">
         <button type="button" [attr.aria-pressed]="source() === 'github'"
           (click)="source.set('github')">GitHub</button>
@@ -36,6 +36,50 @@
         <button type="button">Load project</button>
       </div>
 </section>
+@if (selectedDeployment(); as deployment) {
+  <section id="snapshot-details" class="snapshot-details" aria-labelledby="snapshot-details-heading">
+    <div class="snapshot-details-header">
+      <div>
+        <h2 id="snapshot-details-heading">Snapshot #{{ deployment.snapshot_id }}</h2>
+        <p>Used by {{ deployment.name }}</p>
+      </div>
+      <button type="button" (click)="closeSnapshot()" aria-label="Close snapshot details">Close</button>
+    </div>
+    <div aria-live="polite" [attr.aria-busy]="snapshotLoading()">
+      @if (snapshotLoading()) {
+        <p role="status">Loading snapshot...</p>
+      } @else if (snapshotError()) {
+        <p role="alert">{{ snapshotError() }}</p>
+        <button type="button" (click)="loadSnapshot()">Try again</button>
+      } @else if (snapshot(); as saved) {
+        <dl class="snapshot-metadata">
+          <div>
+            <dt>Saved</dt>
+            <dd>{{ saved.created_at | date:'medium' }}</dd>
+          </div>
+          <div>
+            <dt>Source</dt>
+            <dd>{{ saved.source === 'github' ? 'GitHub' : saved.source === 'gitlab' ? 'GitLab' : saved.source === 'local' ? 'Local folder' : 'Platform' }}</dd>
+          </div>
+          @if (saved.source_branch) {
+            <div><dt>Original branch</dt><dd>{{ saved.source_branch }}</dd></div>
+          }
+          <div class="snapshot-commit">
+            <dt>Saved commit</dt>
+            <dd><code>{{ saved.git_commit_sha }}</code></dd>
+          </div>
+          @if (saved.source_commit_sha) {
+            <div class="snapshot-commit">
+              <dt>Original commit</dt>
+              <dd><code>{{ saved.source_commit_sha }}</code></dd>
+            </div>
+          }
+        </dl>
+        <p>This is the saved version used by this deployment. File browsing is not available yet.</p>
+      }
+    </div>
+  </section>
+}
 <div class="workspace-area">
   <section class="workspace" aria-label="Project files and editor">
     <aside class="file-explorer" aria-labelledby="explorer-heading">
@@ -88,6 +132,10 @@
                 <li>
                   {{ deployment.name }} — {{ deployment.status }}
                   <p>{{ deployment.created_at | date:'short' }}</p>
+                  <button type="button" class="view-snapshot" aria-controls="snapshot-details"
+                    [attr.aria-pressed]="selectedDeployment()?.id === deployment.id"
+                    [attr.aria-label]="'View snapshot for ' + deployment.name"
+                    (click)="viewSnapshot(deployment)">View snapshot</button>
                 </li>
               } @empty {
                 <li>No deployments to show yet.</li>

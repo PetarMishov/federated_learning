@@ -110,6 +110,27 @@ async fn project_members_route_rejects_missing_and_forged_credentials() {
 }
 
 #[tokio::test]
+async fn snapshot_metadata_route_rejects_missing_and_forged_credentials() {
+    let (address, server) =
+        serve(PgPool::connect_lazy("postgres://localhost/unused").unwrap()).await;
+    for token in [None, Some("forged-token")] {
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                "/projects/42/snapshots/7",
+                Value::Null,
+                token
+            )
+            .await
+            .0,
+            401
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL and permission to create a temporary schema"]
 async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     let url = std::env::var("TEST_DATABASE_URL").unwrap();
@@ -149,6 +170,7 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     let result = tokio::spawn(async move {
         check_creation(address, &check_pool, &git).await;
         check_project_members(address, &check_pool).await;
+        check_snapshots(address, &check_pool).await;
     })
     .await;
     server.abort();
@@ -607,4 +629,164 @@ async fn check_creation(address: SocketAddr, pool: &PgPool, git: &crate::git::Gi
             401
         );
     }
+}
+
+async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
+    let mut users = Vec::new();
+    for username in [
+        "snapshot-owner",
+        "snapshot-reader",
+        "snapshot-unassigned",
+        "snapshot-outsider",
+    ] {
+        users.push(
+            sqlx::query_scalar::<_, i32>(
+                "INSERT INTO users (username, password_hash) VALUES ($1, 'unused') RETURNING id",
+            )
+            .bind(username)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        );
+    }
+    let owner = users[0];
+    let reader = users[1];
+    let organization =
+        crate::db::organizations::create_organization(pool, owner, "Snapshot fixture")
+            .await
+            .unwrap();
+    let project = crate::db::projects::create_project(pool, organization.id, owner, "Snapshots")
+        .await
+        .unwrap()
+        .unwrap();
+    let other =
+        crate::db::projects::create_project(pool, organization.id, owner, "Other snapshots")
+            .await
+            .unwrap()
+            .unwrap();
+    let role = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO roles (org_id, name) VALUES ($1, 'Snapshot participant') RETURNING id",
+    )
+    .bind(organization.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    for user in [reader, users[2]] {
+        sqlx::query("INSERT INTO user_organization (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+            .bind(organization.id)
+            .bind(user)
+            .bind(if user == reader { Some(role) } else { None })
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO role_project_permission (org_id, role_id, project_id, perm_id)
+                 SELECT $1, $2, $3, id FROM permissions WHERE name='participate_in_deployment'",
+    )
+    .bind(organization.id)
+    .bind(role)
+    .bind(project.id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let sha = "a".repeat(40);
+    let source_sha = "b".repeat(40);
+    let snapshot_id = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO snapshots (project_id, created_by_user_id, source, source_branch,
+                                source_commit_sha, git_commit_sha, created_at)
+         VALUES ($1, $2, 'github', 'main', $3, $4, '2026-10-01 00:00:00+00') RETURNING id",
+    )
+    .bind(project.id)
+    .bind(owner)
+    .bind(&source_sha)
+    .bind(&sha)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let path = format!("/projects/{}/snapshots/{snapshot_id}", project.id);
+    for user in [owner, reader] {
+        let (status, body) = request(address, "GET", &path, Value::Null, Some(&token(user))).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({
+                "id": snapshot_id, "project_id": project.id, "created_by_user_id": owner,
+                "source": "github", "source_branch": "main", "source_commit_sha": source_sha,
+                "git_commit_sha": sha, "created_at": 1790812800000.0,
+            })
+        );
+    }
+    for (path, user) in [
+        (path.clone(), users[2]),
+        (path.clone(), users[3]),
+        (
+            format!("/projects/{}/snapshots/{snapshot_id}", other.id),
+            owner,
+        ),
+        (
+            format!("/projects/{}/snapshots/2147483647", project.id),
+            owner,
+        ),
+        (
+            format!("/projects/2147483647/snapshots/{snapshot_id}"),
+            owner,
+        ),
+    ] {
+        let (status, body) = request(address, "GET", &path, Value::Null, Some(&token(user))).await;
+        assert_eq!(status, 404, "{body}");
+        assert_eq!(body, "Snapshot not found.");
+    }
+    // Optional provenance is null for local snapshots.
+    let local_id = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha)
+         VALUES ($1, $2, 'local', $3) RETURNING id",
+    )
+    .bind(project.id)
+    .bind(owner)
+    .bind(&sha)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let (status, body) = request(
+        address,
+        "GET",
+        &format!("/projects/{}/snapshots/{local_id}", project.id),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(body["source_branch"].is_null());
+    assert!(body["source_commit_sha"].is_null());
+    // Access follows current grants, not who originally created the snapshot.
+    sqlx::query("DELETE FROM role_project_permission WHERE role_id=$1 AND project_id=$2")
+        .bind(role)
+        .bind(project.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(address, "GET", &path, Value::Null, Some(&token(reader)))
+            .await
+            .0,
+        404
+    );
+    let revoked = token(owner);
+    let state = AppState {
+        pool: pool.clone(),
+        encoding_key: EncodingKey::from_secret(SECRET),
+        decoding_key: DecodingKey::from_secret(SECRET),
+        git: crate::git::GitClient::test_config(),
+    };
+    let claims = crate::db::users::verify_user_token(&revoked, &state).unwrap();
+    sqlx::query("INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, CURRENT_TIMESTAMP + interval '1 hour')")
+        .bind(claims.jti).execute(pool).await.unwrap();
+    assert_eq!(
+        request(address, "GET", &path, Value::Null, Some(&revoked))
+            .await
+            .0,
+        401
+    );
 }

@@ -184,4 +184,120 @@ describe('Project sidebars', () => {
     expect(sessionStorage.getItem('authToken')).toBeNull();
     expect(navigate).toHaveBeenCalledWith('/login');
   });
+
+  const baseline = {
+    id: 1, org_id: 3, project_id: 7, snapshot_id: 4, name: 'Baseline training',
+    status: 'pending', created_by_user_id: 1, created_at: 1760000000000,
+    started_at: null, ended_at: null,
+  };
+  const savedSnapshot = {
+    id: 4, project_id: 7, created_by_user_id: 1, source: 'local',
+    source_branch: null, source_commit_sha: null,
+    git_commit_sha: 'a'.repeat(40), created_at: 1790812800000,
+  };
+
+  async function viewBaselineSnapshot() {
+    const fixture = openDeployments();
+    TestBed.inject(HttpTestingController).expectOne('/projects/7/deployments')
+      .flush({ deployments: [baseline, { ...baseline, id: 2, snapshot_id: 5, name: 'Updated training' }] });
+    await fixture.whenStable();
+    TestBed.inject(HttpTestingController).expectNone('/projects/7/snapshots/4');
+    fixture.nativeElement.querySelector('.view-snapshot').click();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  it('loads snapshot metadata on demand and displays the deployment’s saved version', async () => {
+    const fixture = await viewBaselineSnapshot();
+    expect(fixture.nativeElement.querySelector('.snapshot-details').textContent).toContain('Loading snapshot...');
+    const request = TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/4');
+    expect(request.request.method).toBe('GET');
+    expect(request.request.headers.get('Authorization')).toBe('Bearer saved-token');
+    request.flush(savedSnapshot);
+    await fixture.whenStable();
+    const panel = fixture.nativeElement.querySelector('.snapshot-details');
+    expect(panel.textContent).toContain('Snapshot #4');
+    expect(panel.textContent).toContain('Baseline training');
+    expect(panel.textContent).toContain('Local folder');
+    expect(panel.textContent).toContain(savedSnapshot.git_commit_sha);
+    expect(panel.textContent).not.toContain('Original branch');
+    expect(panel.textContent).not.toContain('null');
+    expect(panel.querySelector('dd').textContent.trim()).not.toBe('');
+  });
+
+  it('cancels the previous snapshot request when choosing another deployment', async () => {
+    const fixture = await viewBaselineSnapshot();
+    const http = TestBed.inject(HttpTestingController);
+    const first = http.expectOne('/projects/7/snapshots/4');
+    fixture.nativeElement.querySelectorAll('.view-snapshot')[1].click();
+    expect(first.cancelled).toBe(true);
+    http.expectOne('/projects/7/snapshots/5').flush({
+      ...savedSnapshot, id: 5, source: 'github', source_branch: 'main', source_commit_sha: 'b'.repeat(40),
+    });
+    await fixture.whenStable();
+    const panel = fixture.nativeElement.querySelector('.snapshot-details');
+    expect(panel.textContent).toContain('Snapshot #5');
+    expect(panel.textContent).toContain('Updated training');
+    expect(panel.textContent).toContain('GitHub');
+    expect(panel.textContent).toContain('main');
+    expect(panel.textContent).toContain('b'.repeat(40));
+  });
+
+  it('cancels snapshot requests and clears details when changing projects', async () => {
+    const fixture = await viewBaselineSnapshot();
+    const http = TestBed.inject(HttpTestingController);
+    const first = http.expectOne('/projects/7/snapshots/4');
+    params.next(convertToParamMap({ orgId: '3', id: '8' }));
+    expect(first.cancelled).toBe(true);
+    http.expectOne('/projects/8/deployments').flush({ deployments: [] });
+    http.expectNone('/projects/8/snapshots/4');
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-details')).toBeNull();
+  });
+
+  it('closes snapshot details and cancels an in-flight request', async () => {
+    const fixture = await viewBaselineSnapshot();
+    const request = TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/4');
+    fixture.nativeElement.querySelector('[aria-label="Close snapshot details"]').click();
+    expect(request.cancelled).toBe(true);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-details')).toBeNull();
+  });
+
+  it('offers snapshot retry without reloading the deployment list', async () => {
+    const fixture = await viewBaselineSnapshot();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/projects/7/snapshots/4').flush('Unavailable', { status: 500, statusText: 'Error' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-details').textContent).toContain('Could not load the snapshot.');
+    fixture.nativeElement.querySelector('.snapshot-details [aria-live] button').click();
+    http.expectNone('/projects/7/deployments');
+    http.expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-details').textContent).toContain(savedSnapshot.git_commit_sha);
+  });
+
+  it('explains inaccessible snapshots without retaining previous metadata', async () => {
+    const fixture = await viewBaselineSnapshot();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
+    await fixture.whenStable();
+    fixture.nativeElement.querySelectorAll('.view-snapshot')[1].click();
+    http.expectOne('/projects/7/snapshots/5').flush('Not found', { status: 404, statusText: 'Not Found' });
+    await fixture.whenStable();
+    const panel = fixture.nativeElement.querySelector('.snapshot-details');
+    expect(panel.textContent).toContain('Snapshot not found or you no longer have access.');
+    expect(panel.textContent).not.toContain(savedSnapshot.git_commit_sha);
+  });
+
+  it('returns to login when the snapshot request reports an expired session', async () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const fixture = await viewBaselineSnapshot();
+    TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/4')
+      .flush('Unauthorized', { status: 401, statusText: 'Unauthorized' });
+    await fixture.whenStable();
+    expect(sessionStorage.getItem('authToken')).toBeNull();
+    expect(navigate).toHaveBeenCalledWith('/login');
+  });
+
 });

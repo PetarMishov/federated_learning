@@ -10,5 +10,9 @@
   "^/projects/[0-9]+/(?:deployments|members)$": {
     "target": "http://127.0.0.1:3000",
     "secure": false
+  },
+  "^/projects/[0-9]+/snapshots/[0-9]+$": {
+    "target": "http://127.0.0.1:3000",
+    "secure": false
   }
 }

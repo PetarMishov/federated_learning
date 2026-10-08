@@ -56,7 +56,8 @@ committing metadata. Download archives will be generated from saved commits.
 Future import/download handlers must reject traversal, exclude Git metadata and
 local datasets from uploaded file trees, and authorize access against current
 project permissions. Resolve files at the saved commit rather than a moving branch.
-The snapshot routes currently return `501 Not Implemented`; their handlers are
+The snapshot metadata route is implemented with authentication and project access
+checks. Other snapshot routes return `501 Not Implemented`; their handlers are
 placeholders. The current Git helper imports only API-owned local repositories.
 
 ## Database operations

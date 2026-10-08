@@ -40,6 +40,17 @@ export interface DeploymentList {
   deployments: Deployment[];
 }
 
+export interface Snapshot {
+  id: number;
+  project_id: number;
+  created_by_user_id: number;
+  source: 'github' | 'gitlab' | 'local' | 'platform';
+  source_branch: string | null;
+  source_commit_sha: string | null;
+  git_commit_sha: string;
+  created_at: number;
+}
+
 export interface Member {
   id: number;
   username: string;
@@ -118,6 +129,12 @@ export class UsersApi {
 
   getProjectMembers(projectId: string) {
     return this.http.get<MemberList>(`/projects/${encodeURIComponent(projectId)}/members`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getSnapshot(projectId: string, snapshotId: number) {
+    return this.http.get<Snapshot>(`/projects/${encodeURIComponent(projectId)}/snapshots/${snapshotId}`, {
       headers: { Authorization: `Bearer ${this.token()}` },
     });
   }

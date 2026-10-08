@@ -4,7 +4,7 @@ import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { EMPTY, Subject, catchError, finalize, startWith, switchMap, tap } from 'rxjs';
-import { Deployment, Member, UsersApi } from '../users-api';
+import { Deployment, Member, Snapshot, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-project',
@@ -19,6 +19,11 @@ export class ProjectPage implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
   private readonly retryDeployments = new Subject<void>();
   private readonly retryMembers = new Subject<void>();
+  private readonly snapshotSelection = new Subject<number | null>();
+  protected readonly selectedDeployment = signal<Deployment | null>(null);
+  protected readonly snapshot = signal<Snapshot | null>(null);
+  protected readonly snapshotLoading = signal(false);
+  protected readonly snapshotError = signal('');
   protected readonly members = signal<Member[]>([]);
   protected readonly membersLoading = signal(false);
   protected readonly membersError = signal('');
@@ -32,6 +37,38 @@ export class ProjectPage implements OnInit {
   });
 
   ngOnInit() {
+    this.route.paramMap.pipe(
+      switchMap((params) => {
+        this.selectedDeployment.set(null);
+        return this.snapshotSelection.pipe(
+          startWith(null),
+          switchMap((snapshotId) => {
+            this.snapshot.set(null);
+            this.snapshotError.set('');
+            this.snapshotLoading.set(false);
+            if (snapshotId === null) return EMPTY;
+            this.snapshotLoading.set(true);
+            return this.api.getSnapshot(params.get('id') ?? '', snapshotId).pipe(
+              tap((snapshot) => this.snapshot.set(snapshot)),
+              catchError((error: HttpErrorResponse) => {
+                if (error.status === 401) {
+                  this.api.clearSession();
+                  void this.router.navigateByUrl('/login');
+                } else {
+                  this.snapshotError.set(error.status === 404
+                    ? 'Snapshot not found or you no longer have access.'
+                    : 'Could not load the snapshot. Please try again.');
+                }
+                return EMPTY;
+              }),
+              finalize(() => this.snapshotLoading.set(false)),
+            );
+          }),
+        );
+      }),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe();
+
     this.route.paramMap.pipe(
       switchMap((params) => this.retryMembers.pipe(
         startWith(undefined),
@@ -91,6 +128,21 @@ export class ProjectPage implements OnInit {
 
   protected loadDeployments() {
     if (!this.deploymentsLoading()) this.retryDeployments.next();
+  }
+
+  protected viewSnapshot(deployment: Deployment) {
+    this.selectedDeployment.set(deployment);
+    this.snapshotSelection.next(deployment.snapshot_id);
+  }
+
+  protected loadSnapshot() {
+    const deployment = this.selectedDeployment();
+    if (deployment && !this.snapshotLoading()) this.snapshotSelection.next(deployment.snapshot_id);
+  }
+
+  protected closeSnapshot() {
+    this.selectedDeployment.set(null);
+    this.snapshotSelection.next(null);
   }
 
   protected toggleMembers() {

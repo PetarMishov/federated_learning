@@ -31,7 +31,9 @@ A failed database transaction may leave an unlisted reference; reconcile that
 later without deleting published snapshots or commits used by deployments.
 Database metadata and Git storage must be backed up together.
 
-Snapshot HTTP routes currently return `501 Not Implemented`. Upload parsing,
+The snapshot metadata endpoint is implemented with authentication and project
+authorization; it reads database metadata. Other snapshot HTTP routes return
+`501 Not Implemented`. Upload parsing,
 commit construction, metadata publication, tree/file reading, and archive download
 are future implementations. Downloads should generate archives from the saved
 commit on demand. The API must resolve snapshots through their project and check
