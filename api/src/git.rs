@@ -15,6 +15,11 @@ pub enum GitError {
     InvalidData(&'static str),
     Io(io::Error),
     Timeout,
+    NotFound,
+    UnsupportedFile,
+    FileTooLarge {
+        size_bytes: usize,
+    },
     CommandFailed {
         status: std::process::ExitStatus,
         stderr: String,
@@ -27,6 +32,9 @@ impl std::fmt::Display for GitError {
             Self::InvalidInput(message) | Self::InvalidData(message) => f.write_str(message),
             Self::Io(error) => write!(f, "Git I/O error: {error}"),
             Self::Timeout => f.write_str("Git operation timed out"),
+            Self::NotFound => f.write_str("Snapshot path not found"),
+            Self::UnsupportedFile => f.write_str("Only regular UTF-8 text files can be viewed"),
+            Self::FileTooLarge { .. } => f.write_str("File exceeds the editor preview size limit"),
             Self::CommandFailed { status, stderr } => {
                 f.write_fmt(format_args!("Git command failed ({status}): {stderr}"))
             }
@@ -59,6 +67,43 @@ pub struct GitClient {
 pub struct GitRef {
     pub commit_sha: String,
     pub name: String,
+}
+
+/// Maximum size of a complete text preview; does not limit snapshot storage.
+pub const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitEntryKind {
+    Directory,
+    File,
+    Symlink,
+    Submodule,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct GitTreeEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: GitEntryKind,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct GitTree {
+    pub path: String,
+    pub entries: Vec<GitTreeEntry>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct GitFile {
+    pub path: String,
+    pub content: String,
+}
+
+struct TreeObject {
+    name: String,
+    oid: String,
+    kind: GitEntryKind,
 }
 
 impl GitClient {
@@ -208,6 +253,169 @@ impl GitClient {
             .collect()
     }
 
+    /// Read one directory from an authorized snapshot's fixed commit.
+    pub async fn snapshot_tree(
+        &self,
+        project_id: i32,
+        sha: &str,
+        path: &str,
+    ) -> Result<GitTree, GitError> {
+        validate_snapshot_path(path, true)?;
+        let oid = self.directory_oid(project_id, sha, path).await?;
+        let mut entries: Vec<_> = self
+            .tree_objects(project_id, &oid)
+            .await?
+            .into_iter()
+            .map(|entry| GitTreeEntry {
+                path: if path.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{path}/{}", entry.name)
+                },
+                name: entry.name,
+                kind: entry.kind,
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            (a.kind != GitEntryKind::Directory)
+                .cmp(&(b.kind != GitEntryKind::Directory))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(GitTree {
+            path: path.to_owned(),
+            entries,
+        })
+    }
+
+    /// Read regular text files only. Never follow symlinks or render binary data.
+    pub async fn snapshot_file(
+        &self,
+        project_id: i32,
+        sha: &str,
+        path: &str,
+    ) -> Result<GitFile, GitError> {
+        validate_snapshot_path(path, false)?;
+        let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
+        let oid = self.directory_oid(project_id, sha, parent).await?;
+        let entry = self
+            .tree_objects(project_id, &oid)
+            .await?
+            .into_iter()
+            .find(|entry| entry.name == name)
+            .ok_or(GitError::NotFound)?;
+        if entry.kind != GitEntryKind::File {
+            return Err(GitError::UnsupportedFile);
+        }
+        let size = self
+            .object_command(project_id, &["cat-file", "-s", &entry.oid])
+            .await?;
+        let size = std::str::from_utf8(&size)
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .ok_or(GitError::InvalidData("Invalid Git file size"))?;
+        if size > MAX_PREVIEW_BYTES {
+            return Err(GitError::FileTooLarge { size_bytes: size });
+        }
+        let content = self
+            .object_command(project_id, &["cat-file", "blob", &entry.oid])
+            .await?;
+        if content.contains(&0) {
+            return Err(GitError::UnsupportedFile);
+        }
+        let content = String::from_utf8(content).map_err(|_| GitError::UnsupportedFile)?;
+        Ok(GitFile {
+            path: path.to_owned(),
+            content,
+        })
+    }
+
+    async fn directory_oid(
+        &self,
+        project_id: i32,
+        sha: &str,
+        path: &str,
+    ) -> Result<String, GitError> {
+        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(GitError::InvalidData("Invalid stored snapshot commit"));
+        }
+        let root = self
+            .object_command(
+                project_id,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("{sha}^{{commit}}^{{tree}}"),
+                ],
+            )
+            .await?;
+        let mut oid = String::from_utf8(root)
+            .map_err(|_| GitError::InvalidData("Invalid Git tree"))?
+            .trim()
+            .to_owned();
+        if !path.is_empty() {
+            for component in path.split('/') {
+                let entry = self
+                    .tree_objects(project_id, &oid)
+                    .await?
+                    .into_iter()
+                    .find(|entry| entry.name == component && entry.kind == GitEntryKind::Directory)
+                    .ok_or(GitError::NotFound)?;
+                oid = entry.oid;
+            }
+        }
+        Ok(oid)
+    }
+
+    async fn tree_objects(&self, project_id: i32, oid: &str) -> Result<Vec<TreeObject>, GitError> {
+        // NUL records preserve spaces and tabs in names. Resolve components by
+        // exact name rather than passing user paths as Git revision/pathspec syntax.
+        let output = self
+            .object_command(project_id, &["ls-tree", "-z", oid])
+            .await?;
+        output
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+            .map(|record| {
+                let record = std::str::from_utf8(record)
+                    .map_err(|_| GitError::InvalidData("Invalid Git filename"))?;
+                let (metadata, name) = record
+                    .split_once('\t')
+                    .ok_or(GitError::InvalidData("Invalid Git tree output"))?;
+                let mut fields = metadata.split_whitespace();
+                let mode = fields
+                    .next()
+                    .ok_or(GitError::InvalidData("Invalid Git mode"))?;
+                let _object_type = fields
+                    .next()
+                    .ok_or(GitError::InvalidData("Invalid Git object type"))?;
+                let oid = fields
+                    .next()
+                    .ok_or(GitError::InvalidData("Invalid Git object ID"))?;
+                let kind = match mode {
+                    "040000" => GitEntryKind::Directory,
+                    "100644" | "100755" => GitEntryKind::File,
+                    "120000" => GitEntryKind::Symlink,
+                    "160000" => GitEntryKind::Submodule,
+                    _ => return Err(GitError::InvalidData("Unsupported Git entry mode")),
+                };
+                Ok(TreeObject {
+                    name: name.to_owned(),
+                    oid: oid.to_owned(),
+                    kind,
+                })
+            })
+            .collect()
+    }
+
+    async fn object_command(&self, project_id: i32, args: &[&str]) -> Result<Vec<u8>, GitError> {
+        let mut command = self.command();
+        command
+            .arg("--git-dir")
+            .arg(self.repository_path(project_id)?)
+            .args(args);
+        run(command).await
+    }
+
     /// Import a commit from a local repository and publish an immutable snapshot.
     /// Callers must authorize the project and supply an API-owned source repository.
     pub async fn publish_snapshot(
@@ -294,6 +502,24 @@ impl GitClient {
 fn validate_project_id(project_id: i32) -> Result<(), GitError> {
     if project_id <= 0 {
         return Err(GitError::InvalidInput("Project ID must be positive"));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_path(path: &str, allow_root: bool) -> Result<(), GitError> {
+    if path.is_empty() && allow_root {
+        return Ok(());
+    }
+    if path.is_empty()
+        || path.contains('\0')
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(GitError::InvalidInput(
+            "Path must be relative to the snapshot root",
+        ));
     }
     Ok(())
 }
@@ -437,6 +663,152 @@ mod tests {
             .args(["show", "refs/snapshots/v1:train.py"]);
         assert_eq!(run(show).await.unwrap(), b"print('snapshot')\n");
         assert_eq!(client.list_snapshot_refs(7).await.unwrap(), refs);
+    }
+
+    #[tokio::test]
+    async fn snapshot_browsing_reads_exact_commits_and_rejects_unsafe_entries() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let source = fixture.0.join("source");
+        let mut init = client.command();
+        init.args(["init", "--quiet"]).arg(&source);
+        run(init).await.unwrap();
+        std::fs::create_dir(source.join("src")).unwrap();
+        std::fs::write(source.join("src/space name.txt"), "old contents\n").unwrap();
+        std::fs::write(source.join("literal[1]*.txt"), "literal").unwrap();
+        std::fs::write(source.join("tab\tname.txt"), "tab").unwrap();
+        std::fs::write(source.join("binary.bin"), [0, 1, 2]).unwrap();
+        std::fs::write(source.join("invalid.bin"), [255]).unwrap();
+        std::fs::write(source.join("empty.txt"), "").unwrap();
+        std::fs::write(source.join("boundary.py"), vec![b'x'; MAX_PREVIEW_BYTES]).unwrap();
+        std::fs::write(source.join("large.txt"), vec![b'x'; MAX_PREVIEW_BYTES + 1]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc/passwd", source.join("link")).unwrap();
+        async fn commit(client: &GitClient, source: &Path) -> String {
+            let mut add = client.command();
+            add.arg("-C").arg(source).args(["add", "--all"]);
+            run(add).await.unwrap();
+            let mut commit = client.command();
+            commit.arg("-C").arg(source).args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@localhost",
+                "commit",
+                "--quiet",
+                "-m",
+                "Files",
+            ]);
+            run(commit).await.unwrap();
+            let mut head = client.command();
+            head.arg("-C").arg(source).args(["rev-parse", "HEAD"]);
+            String::from_utf8(run(head).await.unwrap())
+                .unwrap()
+                .trim()
+                .to_owned()
+        }
+        let first = commit(&client, &source).await;
+        client
+            .publish_snapshot(42, "1", &source, &first)
+            .await
+            .unwrap();
+        std::fs::write(source.join("src/space name.txt"), "new contents\n").unwrap();
+        let second = commit(&client, &source).await;
+        client
+            .publish_snapshot(42, "2", &source, &second)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(source).unwrap();
+        let root = client.snapshot_tree(42, &first, "").await.unwrap();
+        assert_eq!(root.entries[0].path, "src");
+        assert_eq!(root.entries[0].kind, GitEntryKind::Directory);
+        let nested = client.snapshot_tree(42, &first, "src").await.unwrap();
+        assert_eq!(nested.entries[0].path, "src/space name.txt");
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "src/space name.txt")
+                .await
+                .unwrap()
+                .content,
+            "old contents\n"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &second, "src/space name.txt")
+                .await
+                .unwrap()
+                .content,
+            "new contents\n"
+        );
+        for (path, expected) in [
+            ("literal[1]*.txt", "literal"),
+            ("tab\tname.txt", "tab"),
+            ("empty.txt", ""),
+        ] {
+            assert_eq!(
+                client
+                    .snapshot_file(42, &first, path)
+                    .await
+                    .unwrap()
+                    .content,
+                expected
+            );
+        }
+        for path in ["binary.bin", "invalid.bin", "src"] {
+            assert!(matches!(
+                client.snapshot_file(42, &first, path).await,
+                Err(GitError::UnsupportedFile)
+            ));
+        }
+        let boundary = client
+            .snapshot_file(42, &first, "boundary.py")
+            .await
+            .unwrap();
+        assert_eq!(boundary.content.len(), MAX_PREVIEW_BYTES);
+        assert!(boundary.content.bytes().all(|byte| byte == b'x'));
+        assert!(matches!(
+            client.snapshot_file(42, &first, "large.txt").await,
+            Err(GitError::FileTooLarge { size_bytes }) if size_bytes == MAX_PREVIEW_BYTES + 1
+        ));
+        for path in [
+            "../secret",
+            "/etc/passwd",
+            "src/../secret",
+            "src//file",
+            ".",
+            "src\\file",
+            "nul\0",
+        ] {
+            assert!(matches!(
+                client.snapshot_tree(42, &first, path).await,
+                Err(GitError::InvalidInput(_))
+            ));
+        }
+        assert!(matches!(
+            client.snapshot_tree(42, &first, "missing").await,
+            Err(GitError::NotFound)
+        ));
+        assert!(matches!(
+            client.snapshot_file(42, &first, "missing").await,
+            Err(GitError::NotFound)
+        ));
+        #[cfg(unix)]
+        {
+            assert!(
+                root.entries
+                    .iter()
+                    .any(|entry| entry.path == "link" && entry.kind == GitEntryKind::Symlink)
+            );
+            assert!(matches!(
+                client.snapshot_file(42, &first, "link").await,
+                Err(GitError::UnsupportedFile)
+            ));
+            assert!(matches!(
+                client.snapshot_tree(42, &first, "link").await,
+                Err(GitError::NotFound)
+            ));
+        }
     }
 
     #[test]

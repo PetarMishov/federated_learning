@@ -114,18 +114,17 @@ async fn snapshot_metadata_route_rejects_missing_and_forged_credentials() {
     let (address, server) =
         serve(PgPool::connect_lazy("postgres://localhost/unused").unwrap()).await;
     for token in [None, Some("forged-token")] {
-        assert_eq!(
-            request(
-                address,
-                "GET",
-                "/projects/42/snapshots/7",
-                Value::Null,
-                token
-            )
-            .await
-            .0,
-            401
-        );
+        for path in [
+            "/projects/42/snapshots",
+            "/projects/42/snapshots/7",
+            "/projects/42/snapshots/7/tree",
+            "/projects/42/snapshots/7/file?path=train.py",
+        ] {
+            assert_eq!(
+                request(address, "GET", path, Value::Null, token).await.0,
+                401
+            );
+        }
     }
     server.abort();
 }
@@ -170,7 +169,7 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     let result = tokio::spawn(async move {
         check_creation(address, &check_pool, &git).await;
         check_project_members(address, &check_pool).await;
-        check_snapshots(address, &check_pool).await;
+        check_snapshots(address, &check_pool, &git).await;
     })
     .await;
     server.abort();
@@ -631,7 +630,7 @@ async fn check_creation(address: SocketAddr, pool: &PgPool, git: &crate::git::Gi
     }
 }
 
-async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
+async fn check_snapshots(address: SocketAddr, pool: &PgPool, git: &crate::git::GitClient) {
     let mut users = Vec::new();
     for username in [
         "snapshot-owner",
@@ -690,7 +689,56 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-    let sha = "a".repeat(40);
+    let source = git
+        .repository_root()
+        .parent()
+        .unwrap()
+        .join("snapshot-source");
+    std::fs::create_dir_all(source.join("src")).unwrap();
+    std::fs::write(source.join("train.py"), "print('snapshot')\n").unwrap();
+    std::fs::write(source.join("src/space name.txt"), "nested contents\n").unwrap();
+    std::fs::write(source.join("binary.bin"), [0, 1]).unwrap();
+    std::fs::write(
+        source.join("large.txt"),
+        vec![b'x'; crate::git::MAX_PREVIEW_BYTES + 1],
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "--all"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@localhost",
+            "commit",
+            "--quiet",
+            "-m",
+            "Snapshot",
+        ],
+    ] {
+        assert!(
+            tokio::process::Command::new("git")
+                .arg("-C")
+                .arg(&source)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let head = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(&source)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .await
+        .unwrap();
+    let sha = String::from_utf8(head.stdout).unwrap().trim().to_owned();
     let source_sha = "b".repeat(40);
     let snapshot_id = sqlx::query_scalar::<_, i32>(
         "INSERT INTO snapshots (project_id, created_by_user_id, source, source_branch,
@@ -704,6 +752,10 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
     .fetch_one(pool)
     .await
     .unwrap();
+    git.create_project_repository(project.id).await.unwrap();
+    git.publish_snapshot(project.id, &snapshot_id.to_string(), &source, &sha)
+        .await
+        .unwrap();
     let path = format!("/projects/{}/snapshots/{snapshot_id}", project.id);
     for user in [owner, reader] {
         let (status, body) = request(address, "GET", &path, Value::Null, Some(&token(user))).await;
@@ -760,6 +812,239 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
     let body: Value = serde_json::from_str(&body).unwrap();
     assert!(body["source_branch"].is_null());
     assert!(body["source_commit_sha"].is_null());
+    for user in [owner, reader] {
+        let (status, body) = request(
+            address,
+            "GET",
+            &format!("{path}/tree"),
+            Value::Null,
+            Some(&token(user)),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        let tree: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(tree["path"], "");
+        assert!(
+            tree["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == "src" && entry["kind"] == "directory")
+        );
+        let (status, body) = request(
+            address,
+            "GET",
+            &format!("{path}/tree?path=src"),
+            Value::Null,
+            Some(&token(user)),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["entries"][0]["path"],
+            "src/space name.txt"
+        );
+        let (status, body) = request(
+            address,
+            "GET",
+            &format!("{path}/file?path=src%2Fspace%20name.txt"),
+            Value::Null,
+            Some(&token(user)),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({"path":"src/space name.txt", "content":"nested contents\n"})
+        );
+    }
+    for (suffix, expected) in [
+        ("/tree?path=..", 400),
+        ("/file?path=%2Fetc%2Fpasswd", 400),
+        ("/tree?path=missing", 404),
+        ("/file?path=missing", 404),
+        ("/file?path=binary.bin", 415),
+        ("/file?path=src", 415),
+    ] {
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                &format!("{path}{suffix}"),
+                Value::Null,
+                Some(&token(owner))
+            )
+            .await
+            .0,
+            expected
+        );
+    }
+    let (status, body) = request(
+        address,
+        "GET",
+        &format!("{path}/file?path=large.txt"),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 413, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({
+            "error": "preview_too_large",
+            "size_bytes": crate::git::MAX_PREVIEW_BYTES + 1,
+            "max_preview_bytes": crate::git::MAX_PREVIEW_BYTES,
+        })
+    );
+    for suffix in ["/tree", "/file?path=train.py"] {
+        for user in [users[2], users[3]] {
+            assert_eq!(
+                request(
+                    address,
+                    "GET",
+                    &format!("{path}{suffix}"),
+                    Value::Null,
+                    Some(&token(user))
+                )
+                .await
+                .0,
+                404
+            );
+        }
+        let wrong_project = format!("/projects/{}/snapshots/{snapshot_id}{suffix}", other.id);
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                &wrong_project,
+                Value::Null,
+                Some(&token(owner))
+            )
+            .await
+            .0,
+            404
+        );
+    }
+    let backdated_id = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha, created_at)
+         VALUES ($1, $2, 'local', $3, '2026-09-01 00:00:00+00') RETURNING id",
+    )
+    .bind(project.id)
+    .bind(owner)
+    .bind(&sha)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let tied_id = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha, created_at)
+         SELECT $1, $2, 'local', $3, created_at FROM snapshots WHERE id=$4 RETURNING id",
+    )
+    .bind(project.id)
+    .bind(owner)
+    .bind(&sha)
+    .bind(local_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let list_path = format!("/projects/{}/snapshots", project.id);
+    for user in [owner, reader] {
+        let (status, body) =
+            request(address, "GET", &list_path, Value::Null, Some(&token(user))).await;
+        assert_eq!(status, 200, "{body}");
+        let list: Value = serde_json::from_str(&body).unwrap();
+        let ids: Vec<_> = list["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                i64::from(tied_id),
+                i64::from(local_id),
+                i64::from(snapshot_id),
+                i64::from(backdated_id)
+            ]
+        );
+        assert_eq!(list["has_more"], false);
+    }
+    for (query, expected_id, has_more) in [
+        ("?limit=1", Some(tied_id), true),
+        ("?limit=1&offset=1", Some(local_id), true),
+        ("?offset=100", None, false),
+    ] {
+        let (status, body) = request(
+            address,
+            "GET",
+            &format!("{list_path}{query}"),
+            Value::Null,
+            Some(&token(owner)),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        let list: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(list["has_more"], has_more);
+        if let Some(id) = expected_id {
+            assert_eq!(list["snapshots"][0]["id"], id);
+        } else {
+            assert_eq!(list["snapshots"], json!([]));
+        }
+    }
+    for limit in [0, 101] {
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                &format!("{list_path}?limit={limit}"),
+                Value::Null,
+                Some(&token(owner))
+            )
+            .await
+            .0,
+            400
+        );
+    }
+    let (status, body) = request(
+        address,
+        "GET",
+        &format!("/projects/{}/snapshots", other.id),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({"snapshots": [], "has_more": false})
+    );
+    for (project_id, user) in [
+        (project.id, users[2]),
+        (project.id, users[3]),
+        (2147483647, owner),
+    ] {
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                &format!("/projects/{project_id}/snapshots"),
+                Value::Null,
+                Some(&token(user))
+            )
+            .await
+            .0,
+            404
+        );
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deployment_runs WHERE project_id=$1")
+            .bind(project.id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
+
     // Access follows current grants, not who originally created the snapshot.
     sqlx::query("DELETE FROM role_project_permission WHERE role_id=$1 AND project_id=$2")
         .bind(role)
@@ -773,6 +1058,32 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
             .0,
         404
     );
+    for suffix in ["/tree", "/file?path=train.py"] {
+        assert_eq!(
+            request(
+                address,
+                "GET",
+                &format!("{path}{suffix}"),
+                Value::Null,
+                Some(&token(reader))
+            )
+            .await
+            .0,
+            404
+        );
+    }
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &list_path,
+            Value::Null,
+            Some(&token(reader))
+        )
+        .await
+        .0,
+        404
+    );
     let revoked = token(owner);
     let state = AppState {
         pool: pool.clone(),
@@ -783,6 +1094,12 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool) {
     let claims = crate::db::users::verify_user_token(&revoked, &state).unwrap();
     sqlx::query("INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, CURRENT_TIMESTAMP + interval '1 hour')")
         .bind(claims.jti).execute(pool).await.unwrap();
+    assert_eq!(
+        request(address, "GET", &list_path, Value::Null, Some(&revoked))
+            .await
+            .0,
+        401
+    );
     assert_eq!(
         request(address, "GET", &path, Value::Null, Some(&revoked))
             .await

@@ -52,33 +52,73 @@ h2 {
 }
 
 .snapshot-details {
-  border: 1px solid #ccc;
-  border-left: 3px solid #555;
-  padding: 16px;
-}
-
-.snapshot-details-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 360px;
+  min-width: 0;
 }
 
-.snapshot-details-header p {
-  margin: 6px 0 0;
+.snapshot-details > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.snapshot-details p {
+  margin: 0;
+}
+
+.snapshot-picker {
+  border: 1px solid #ccc;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.snapshot-picker-controls {
+  flex: 0 1 340px;
+  min-width: 0;
+}
+
+.snapshot-picker-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.snapshot-picker label {
+  margin-right: 8px;
+}
+
+.snapshot-picker select {
+  margin: 12px 8px 0 0;
+  max-width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  background: white;
+  border: 1px solid #aaa;
 }
 
 .snapshot-metadata {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px 32px;
-  margin: 20px 0;
+  gap: 8px 20px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.snapshot-metadata > div {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .snapshot-metadata dt {
   color: #555;
   font-size: 13px;
-  margin-bottom: 6px;
+  margin-bottom: 2px;
 }
 
 .snapshot-metadata dd {
@@ -86,9 +126,35 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.snapshot-commit {
-  flex-basis: 100%;
-  min-width: 0;
+.snapshot-commit code {
+  display: block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-commit-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+button.copy-commit {
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  cursor: pointer;
+}
+
+.copy-commit:hover {
+  background: #eee;
+}
+
+.commit-copy-message {
+  color: #555;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .drawer li + li {
@@ -161,6 +227,48 @@ button[aria-pressed='true'] {
   min-width: 0;
   overflow: auto;
   padding: 16px;
+}
+
+.directory-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.file-list {
+  list-style: none;
+  padding: 0;
+}
+
+.file-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 4px;
+  text-align: left;
+  border-color: transparent;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.file-entry:disabled {
+  cursor: default;
+}
+
+.file-content {
+  padding: 12px;
+  background: #f6f6f6;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 4;
+}
+
+.editor-path {
+  margin-bottom: 12px;
 }
 
 .drawer {

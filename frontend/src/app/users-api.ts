@@ -51,6 +51,33 @@ export interface Snapshot {
   created_at: number;
 }
 
+export interface SnapshotList {
+  snapshots: Snapshot[];
+  has_more: boolean;
+}
+
+export interface SnapshotTreeEntry {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file' | 'symlink' | 'submodule';
+}
+
+export interface SnapshotTree {
+  path: string;
+  entries: SnapshotTreeEntry[];
+}
+
+export interface SnapshotFile {
+  path: string;
+  content: string;
+}
+
+export interface SnapshotPreviewTooLarge {
+  error: 'preview_too_large';
+  size_bytes: number;
+  max_preview_bytes: number;
+}
+
 export interface Member {
   id: number;
   username: string;
@@ -136,6 +163,27 @@ export class UsersApi {
   getSnapshot(projectId: string, snapshotId: number) {
     return this.http.get<Snapshot>(`/projects/${encodeURIComponent(projectId)}/snapshots/${snapshotId}`, {
       headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getSnapshots(projectId: string, offset = 0) {
+    return this.http.get<SnapshotList>(`/projects/${encodeURIComponent(projectId)}/snapshots`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+      params: { limit: 50, offset },
+    });
+  }
+
+  getSnapshotTree(projectId: number, snapshotId: number, path = '') {
+    return this.http.get<SnapshotTree>(`/projects/${projectId}/snapshots/${snapshotId}/tree`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+      params: { path },
+    });
+  }
+
+  getSnapshotFile(projectId: number, snapshotId: number, path: string) {
+    return this.http.get<SnapshotFile>(`/projects/${projectId}/snapshots/${snapshotId}/file`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+      params: { path },
     });
   }
 

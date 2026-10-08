@@ -36,59 +36,164 @@
         <button type="button">Load project</button>
       </div>
 </section>
-@if (selectedDeployment(); as deployment) {
-  <section id="snapshot-details" class="snapshot-details" aria-labelledby="snapshot-details-heading">
-    <div class="snapshot-details-header">
-      <div>
-        <h2 id="snapshot-details-heading">Snapshot #{{ deployment.snapshot_id }}</h2>
-        <p>Used by {{ deployment.name }}</p>
-      </div>
-      <button type="button" (click)="closeSnapshot()" aria-label="Close snapshot details">Close</button>
+<section class="snapshot-picker" aria-labelledby="saved-snapshots-heading">
+  <div class="snapshot-picker-controls">
+    <div class="snapshot-picker-header">
+      <h2 id="saved-snapshots-heading">Saved snapshots</h2>
+      <button type="button" disabled title="Coming soon">Save as new snapshot</button>
     </div>
-    <div aria-live="polite" [attr.aria-busy]="snapshotLoading()">
-      @if (snapshotLoading()) {
-        <p role="status">Loading snapshot...</p>
-      } @else if (snapshotError()) {
-        <p role="alert">{{ snapshotError() }}</p>
-        <button type="button" (click)="loadSnapshot()">Try again</button>
-      } @else if (snapshot(); as saved) {
-        <dl class="snapshot-metadata">
-          <div>
-            <dt>Saved</dt>
-            <dd>{{ saved.created_at | date:'medium' }}</dd>
-          </div>
-          <div>
-            <dt>Source</dt>
-            <dd>{{ saved.source === 'github' ? 'GitHub' : saved.source === 'gitlab' ? 'GitLab' : saved.source === 'local' ? 'Local folder' : 'Platform' }}</dd>
-          </div>
-          @if (saved.source_branch) {
-            <div><dt>Original branch</dt><dd>{{ saved.source_branch }}</dd></div>
+    <div aria-live="polite" [attr.aria-busy]="snapshotsLoading()">
+      @if (snapshotsLoading() && !snapshots().length) {
+        <p role="status">Loading snapshots...</p>
+      } @else if (!snapshots().length && !snapshotsError()) {
+        <p>No snapshots have been saved yet.</p>
+      }
+      @if (snapshots().length) {
+        <label for="saved-snapshot">Snapshot</label>
+        <select id="saved-snapshot" #snapshotPicker [value]="selectedSnapshotId() ?? ''"
+          (change)="selectSnapshot(snapshotPicker.value ? +snapshotPicker.value : null)">
+          <option value="" [selected]="selectedSnapshotId() === null">No snapshot selected</option>
+          @if (snapshot(); as saved) {
+            @if (!selectedSnapshotIsListed()) {
+              <option [value]="saved.id" selected>Snapshot #{{ saved.id }} · {{ saved.created_at | date:'short' }}</option>
+            }
           }
-          <div class="snapshot-commit">
-            <dt>Saved commit</dt>
-            <dd><code>{{ saved.git_commit_sha }}</code></dd>
-          </div>
-          @if (saved.source_commit_sha) {
-            <div class="snapshot-commit">
-              <dt>Original commit</dt>
-              <dd><code>{{ saved.source_commit_sha }}</code></dd>
-            </div>
+          @for (saved of snapshots(); track saved.id; let first = $first) {
+            <option [value]="saved.id" [selected]="selectedSnapshotId() === saved.id">Snapshot #{{ saved.id }} · {{ saved.created_at | date:'short' }}{{ first ? ' · Newest' : '' }}</option>
           }
-        </dl>
-        <p>This is the saved version used by this deployment. File browsing is not available yet.</p>
+        </select>
+      }
+      @if (snapshotsError()) {
+        <p role="alert">{{ snapshotsError() }}</p>
+        <button type="button" (click)="loadSnapshots()">Try again</button>
+      }
+      @if (snapshotsHasMore()) {
+        <button type="button" (click)="loadOlderSnapshots()" [disabled]="snapshotsLoading()">{{ snapshotsLoading() ? 'Loading...' : 'Load older snapshots' }}</button>
       }
     </div>
-  </section>
-}
+  </div>
+  @if (selectedSnapshotId() !== null) {
+    <section id="snapshot-details" class="snapshot-details" aria-label="Selected snapshot details">
+      <div aria-live="polite" [attr.aria-busy]="snapshotLoading()">
+        @if (snapshotLoading()) {
+          <p role="status">Loading snapshot...</p>
+        } @else if (snapshotError()) {
+          <p role="alert">{{ snapshotError() }}</p>
+          <button type="button" (click)="loadSnapshot()">Try again</button>
+        } @else if (snapshot(); as saved) {
+          <dl class="snapshot-metadata">
+            <div>
+              <dt>Version</dt>
+              <dd>Snapshot #{{ saved.id }}</dd>
+            </div>
+            <div>
+              <dt>Saved</dt>
+              <dd>{{ saved.created_at | date:'medium' }}</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>{{ saved.source === 'github' ? 'GitHub' : saved.source === 'gitlab' ? 'GitLab' : saved.source === 'local' ? 'Local folder' : 'Platform' }}</dd>
+            </div>
+            @if (saved.source_branch) {
+              <div><dt>Original branch</dt><dd>{{ saved.source_branch }}</dd></div>
+            }
+            <div class="snapshot-commit">
+              <dt>Saved commit</dt>
+              <dd>
+                <div class="saved-commit-value">
+                  <code [title]="saved.git_commit_sha">{{ saved.git_commit_sha }}</code>
+                  <button type="button" class="copy-commit" aria-label="Copy saved commit" title="Copy saved commit"
+                    (click)="copySavedCommit()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                      stroke-width="1.5" aria-hidden="true" focusable="false">
+                      <rect x="8" y="8" width="12" height="12" rx="2" />
+                      <path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
+                    </svg>
+                  </button>
+                  <span class="commit-copy-message" role="status">{{ commitCopyMessage() }}</span>
+                </div>
+              </dd>
+            </div>
+            @if (saved.source_commit_sha) {
+              <div class="snapshot-commit">
+                <dt>Original commit</dt>
+                <dd><code [title]="saved.source_commit_sha">{{ saved.source_commit_sha }}</code></dd>
+              </div>
+            }
+          </dl>
+        }
+      </div>
+      <button type="button" (click)="closeSnapshot()" aria-label="Close snapshot details">Close</button>
+    </section>
+  }
+</section>
 <div class="workspace-area">
   <section class="workspace" aria-label="Project files and editor">
     <aside class="file-explorer" aria-labelledby="explorer-heading">
       <h2 id="explorer-heading">Files</h2>
-      <p>No folder or repository loaded.</p>
+      @if (snapshot(); as saved) {
+        <p>Snapshot #{{ saved.id }}</p>
+        <div class="directory-navigation">
+          @if (directoryPath()) {
+            <button type="button" (click)="browseParent()" aria-label="Go to parent folder">Up</button>
+          }
+          <span>{{ directoryPath() || '/' }}</span>
+        </div>
+        <div aria-live="polite" [attr.aria-busy]="treeLoading()">
+          @if (treeLoading()) {
+            <p role="status">Loading files...</p>
+          } @else if (treeError()) {
+            <p role="alert">{{ treeError() }}</p>
+            <button type="button" (click)="loadTree()">Try again</button>
+          } @else {
+            <ul class="file-list">
+              @for (entry of entries(); track entry.path) {
+                <li>
+                  <button type="button" class="file-entry" (click)="openEntry(entry)"
+                    [disabled]="entry.kind === 'symlink' || entry.kind === 'submodule'"
+                    [attr.aria-pressed]="entry.kind === 'file' ? selectedFilePath() === entry.path : null"
+                    [attr.aria-label]="(entry.kind === 'directory' ? 'Open folder ' : 'Open file ') + entry.name">
+                    <span>{{ entry.name }}{{ entry.kind === 'directory' ? '/' : '' }}</span>
+                    @if (entry.kind === 'symlink' || entry.kind === 'submodule') {
+                      <small>{{ entry.kind }}</small>
+                    }
+                  </button>
+                </li>
+              } @empty {
+                <li><p>This folder is empty.</p></li>
+              }
+            </ul>
+          }
+        </div>
+      } @else {
+        <p>{{ snapshotLoading() ? 'Loading snapshot...' : 'Select a saved snapshot above to browse its files.' }}</p>
+      }
     </aside>
     <div class="editor" aria-labelledby="editor-heading">
       <h2 id="editor-heading">Editor</h2>
-      <p>Select a file to open it here.</p>
+      @if (selectedFilePath(); as path) {
+        <p class="editor-path">{{ path }} · Read-only</p>
+        <div aria-live="polite" [attr.aria-busy]="fileLoading()">
+          @if (fileLoading()) {
+            <p role="status">Loading file...</p>
+          } @else if (filePreviewTooLarge(); as oversized) {
+            <p>This file is too large to preview. It is still saved in this snapshot.</p>
+            <p>File size: {{ oversized.size_bytes / (1024 * 1024) | number:'1.0-2' }} MiB
+              ({{ oversized.size_bytes | number }} bytes).
+              Preview limit: {{ oversized.max_preview_bytes / (1024 * 1024) | number:'1.0-2' }} MiB.</p>
+            <button type="button" disabled title="Coming soon">Download file</button>
+            <p>File downloads are not available yet.</p>
+          } @else if (fileError()) {
+            <p role="alert">{{ fileError() }}</p>
+            <button type="button" (click)="loadFile()">Try again</button>
+          } @else if (file(); as opened) {
+            <pre class="file-content" tabindex="0" [attr.aria-label]="'Contents of ' + path"><code>{{ opened.content }}</code></pre>
+            @if (opened.content === '') { <p>This file is empty.</p> }
+          }
+        </div>
+      } @else {
+        <p>Select a file to open it here.</p>
+      }
     </div>
   </section>
   @if (drawer()) {
@@ -133,7 +238,7 @@
                   {{ deployment.name }} — {{ deployment.status }}
                   <p>{{ deployment.created_at | date:'short' }}</p>
                   <button type="button" class="view-snapshot" aria-controls="snapshot-details"
-                    [attr.aria-pressed]="selectedDeployment()?.id === deployment.id"
+                    [attr.aria-pressed]="selectedSnapshotId() === deployment.snapshot_id"
                     [attr.aria-label]="'View snapshot for ' + deployment.name"
                     (click)="viewSnapshot(deployment)">View snapshot</button>
                 </li>

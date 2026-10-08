@@ -2,6 +2,7 @@ mod auth;
 mod db;
 pub mod git;
 mod routers;
+mod snapshots;
 mod state;
 
 use axum::Router;

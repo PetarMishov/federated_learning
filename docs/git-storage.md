@@ -31,13 +31,16 @@ A failed database transaction may leave an unlisted reference; reconcile that
 later without deleting published snapshots or commits used by deployments.
 Database metadata and Git storage must be backed up together.
 
-The snapshot metadata endpoint is implemented with authentication and project
-authorization; it reads database metadata. Other snapshot HTTP routes return
-`501 Not Implemented`. Upload parsing,
-commit construction, metadata publication, tree/file reading, and archive download
+Snapshot listing, metadata, directory listing, and text file endpoints are implemented
+with authentication and project authorization. Directory/file reads use the saved
+commit and resolve exact names within Git trees, without following symlinks or
+reading host filesystem paths. The editor accepts regular UTF-8 text files up to
+8 MiB. This preview limit does not constrain snapshot storage. Oversized file
+responses include the file size and preview limit, displayed in the editor with
+a disabled download placeholder. Other snapshot routes return `501 Not Implemented`. Upload parsing, commit
+construction, metadata publication, and archive download
 are future implementations. Downloads should generate archives from the saved
-commit on demand. The API must resolve snapshots through their project and check
-current permissions before reading files; it must not serve storage as public assets.
+commit on demand. Storage is never served as public assets.
 
 ## Demo data
 

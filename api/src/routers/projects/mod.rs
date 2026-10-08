@@ -74,13 +74,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        for (method, suffix) in [
-            ("POST", ""),
-            ("GET", ""),
-            ("GET", "/7/tree?path=src"),
-            ("GET", "/7/file?path=train.py"),
-            ("GET", "/7/archive"),
-        ] {
+        for (method, suffix) in [("POST", ""), ("GET", "/7/archive")] {
             let mut connection = TcpStream::connect(address).await.unwrap();
             let request = format!(
                 "{method} /projects/42/snapshots{suffix} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

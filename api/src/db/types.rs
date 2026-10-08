@@ -54,6 +54,12 @@ pub struct Snapshot {
 }
 
 #[derive(Serialize)]
+pub struct SnapshotList {
+    pub snapshots: Vec<Snapshot>,
+    pub has_more: bool,
+}
+
+#[derive(Serialize)]
 pub struct MemberList {
     pub members: Vec<Member>,
 }
