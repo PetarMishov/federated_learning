@@ -28,7 +28,7 @@ impl std::fmt::Display for GitError {
             Self::Io(error) => write!(f, "Git I/O error: {error}"),
             Self::Timeout => f.write_str("Git operation timed out"),
             Self::CommandFailed { status, stderr } => {
-                write!(f, "Git command failed ({status}): {stderr}")
+                f.write_fmt(format_args!("Git command failed ({status}): {stderr}"))
             }
         }
     }
@@ -70,7 +70,7 @@ impl GitClient {
         Self::configured(storage)
     }
 
-    fn configured(storage: PathBuf) -> Result<Self, GitError> {
+    pub(crate) fn configured(storage: PathBuf) -> Result<Self, GitError> {
         if !storage.is_absolute() {
             return Err(GitError::InvalidInput("GIT_STORAGE_DIR must be absolute"));
         }
@@ -149,6 +149,35 @@ impl GitClient {
             ));
         }
         Ok(repository)
+    }
+
+    /// Create storage exclusively for a new project; never adopt existing storage.
+    pub async fn create_new_project_repository(&self, project_id: i32) -> Result<(), GitError> {
+        let repository = self.repository_path(project_id)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&repository)?;
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&repository)?;
+        if let Err(error) = self.create_project_repository(project_id).await {
+            if let Err(cleanup) = self.remove_project_repository(project_id) {
+                eprintln!("Could not clean up repository for project {project_id}: {cleanup}");
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Caller must establish that no committed project owns this repository.
+    pub fn remove_project_repository(&self, project_id: i32) -> Result<(), GitError> {
+        let repository = self.repository_path(project_id)?;
+        match std::fs::remove_dir_all(repository) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// List permanently retained snapshots directly from local storage.
@@ -413,6 +442,22 @@ mod tests {
     #[test]
     fn rejects_relative_storage() {
         assert!(GitClient::configured(PathBuf::from("relative/storage")).is_err());
+    }
+
+    #[tokio::test]
+    async fn new_project_storage_is_exclusive_and_can_be_cleaned_up() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_new_project_repository(42).await.unwrap();
+        let repository = client.repository_path(42).unwrap();
+        assert!(repository.join("HEAD").is_file());
+        assert!(client.list_snapshot_refs(42).await.unwrap().is_empty());
+        std::fs::write(repository.join("sentinel"), b"keep").unwrap();
+        assert!(client.create_new_project_repository(42).await.is_err());
+        assert_eq!(std::fs::read(repository.join("sentinel")).unwrap(), b"keep");
+        client.remove_project_repository(42).unwrap();
+        assert!(!repository.exists());
+        client.remove_project_repository(42).unwrap();
     }
 
     #[cfg(unix)]

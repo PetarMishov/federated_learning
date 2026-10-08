@@ -16,6 +16,13 @@ use tokio::{
 const SECRET: &[u8] = b"creation-test-secret-at-least-thirty-two-bytes";
 
 async fn serve(pool: PgPool) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    serve_with_git(pool, crate::git::GitClient::test_config()).await
+}
+
+async fn serve_with_git(
+    pool: PgPool,
+    git: crate::git::GitClient,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let app = Router::new()
         .merge(organizations_router())
         .merge(projects_router())
@@ -24,7 +31,7 @@ async fn serve(pool: PgPool) -> (SocketAddr, tokio::task::JoinHandle<()>) {
             pool,
             encoding_key: EncodingKey::from_secret(SECRET),
             decoding_key: DecodingKey::from_secret(SECRET),
-            git: crate::git::GitClient::test_config(),
+            git,
         });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -134,16 +141,19 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
         .collect::<Vec<_>>()
         .join("\n");
     sqlx::raw_sql(&schema_sql).execute(&pool).await.unwrap();
-    let (address, server) = serve(pool.clone()).await;
+    let storage = std::env::temp_dir().join(format!("fl-creation-{}", uuid::Uuid::new_v4()));
+    let git = crate::git::GitClient::configured(storage.clone()).unwrap();
+    let (address, server) = serve_with_git(pool.clone(), git.clone()).await;
     let check_pool = pool.clone();
     // Run assertions in a task so a failed assertion still allows schema cleanup.
     let result = tokio::spawn(async move {
-        check_creation(address, &check_pool).await;
+        check_creation(address, &check_pool, &git).await;
         check_project_members(address, &check_pool).await;
     })
     .await;
     server.abort();
     pool.close().await;
+    std::fs::remove_dir_all(storage).unwrap();
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)
         .await
@@ -291,7 +301,7 @@ async fn check_project_members(address: SocketAddr, pool: &PgPool) {
     );
 }
 
-async fn check_creation(address: SocketAddr, pool: &PgPool) {
+async fn check_creation(address: SocketAddr, pool: &PgPool, git: &crate::git::GitClient) {
     let owner = sqlx::query_scalar::<_, i32>(
         "INSERT INTO users (username, password_hash) VALUES ('owner', 'unused') RETURNING id",
     )
@@ -355,6 +365,13 @@ async fn check_creation(address: SocketAddr, pool: &PgPool) {
     assert_eq!(project["name"], "Training");
     assert_eq!(project["org_id"], org_id);
     assert_eq!(project["created_by_user_id"], owner);
+    let project_id = project["id"].as_i64().unwrap() as i32;
+    assert!(
+        git.repository_root()
+            .join(format!("{project_id}.git/HEAD"))
+            .is_file()
+    );
+    assert!(git.list_snapshot_refs(project_id).await.unwrap().is_empty());
     let mounts = sqlx::query_as::<_, (String, String)>(
         "SELECT input_mount_destination, output_mount_destination FROM projects WHERE id = $1",
     )
@@ -507,6 +524,70 @@ async fn check_creation(address: SocketAddr, pool: &PgPool) {
             .unwrap(),
         1
     );
+    // Fail at COMMIT, after Git initialization has succeeded.
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_project_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 'test commit rejection'; END $$;
+         CREATE CONSTRAINT TRIGGER reject_project_commit
+         AFTER INSERT ON projects DEFERRABLE INITIALLY DEFERRED
+         FOR EACH ROW EXECUTE FUNCTION reject_project_commit();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let (status, _) = request(
+        address,
+        "POST",
+        &project_path,
+        json!({"name": "Commit failure"}),
+        Some(&owner_token),
+    )
+    .await;
+    assert_eq!(status, 500);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(std::fs::read_dir(git.repository_root()).unwrap().count(), 1);
+    sqlx::raw_sql(
+        "DROP TRIGGER reject_project_commit ON projects; DROP FUNCTION reject_project_commit();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Existing storage must neither be adopted nor deleted on creation failure.
+    let next_id = sqlx::query_scalar::<_, i32>(
+        "SELECT nextval(pg_get_serial_sequence('projects', 'id'))::integer",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+        + 1;
+    let existing = git.repository_root().join(format!("{next_id}.git"));
+    std::fs::create_dir(&existing).unwrap();
+    std::fs::write(existing.join("sentinel"), b"keep").unwrap();
+    let (status, _) = request(
+        address,
+        "POST",
+        &project_path,
+        json!({"name": "Repository failure"}),
+        Some(&owner_token),
+    )
+    .await;
+    assert_eq!(status, 500);
+    assert_eq!(std::fs::read(existing.join("sentinel")).unwrap(), b"keep");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        1
+    );
+
     sqlx::query("INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, CURRENT_TIMESTAMP + interval '1 hour')")
         .bind(crate::db::users::verify_user_token(&owner_token, &AppState {
             pool: pool.clone(), encoding_key: EncodingKey::from_secret(SECRET), decoding_key: DecodingKey::from_secret(SECRET),

@@ -41,8 +41,8 @@ pub async fn get_project_members(
     })
 }
 
-pub async fn create_project(
-    pool: &PgPool,
+pub async fn create_project<'a>(
+    executor: impl sqlx::PgExecutor<'a>,
     org_id: i32,
     user_id: i32,
     name: &str,
@@ -64,7 +64,7 @@ pub async fn create_project(
     .bind(org_id)
     .bind(user_id)
     .bind(name)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(|(id, org_id, created_by_user_id, name)| Project {
         id,
