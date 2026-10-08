@@ -1,2 +1,2 @@
 mod github;
-mod gitlab;
+pub(crate) mod gitlab;

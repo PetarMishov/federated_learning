@@ -108,7 +108,7 @@ CREATE TABLE provider_connections (
 );
 
 COMMENT ON TABLE provider_connections IS
-    'Personal GitHub App / GitLab OAuth connections. External account IDs are not unique. Local unlink affects one connection; provider revocation affects revoked credentials. Encryption keys live outside the database.';
+    'Personal GitHub App / GitLab access-token connections. External account IDs are not unique. Local unlink affects one connection; provider revocation affects revoked credentials. Encryption keys live outside the database.';
 
 CREATE TABLE projects (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -278,3 +278,55 @@ permission checks and archive generation remain TODOs for archive downloads.
 
 The database stores `git_commit_sha`; files are retained in the project's repository
 at `refs/snapshots/<snapshot-id>`. See [Git storage](../docs/git-storage.md).
+
+## GitLab token authorization
+
+`POST /connectors/gitlab/authorize` requires a local session bearer token and JSON:
+
+```json
+{"token": "glpat-your-personal-access-token"}
+```
+
+Create a GitLab personal access token with `read_user` and `read_repository`
+scopes. `read_api` can replace `read_user` if repository discovery is needed.
+No write permission is required. Existing broader scopes that provide the same
+read access are accepted; this connector makes only GET requests to GitLab.
+
+The handler verifies token metadata with `GET /api/v4/personal_access_tokens/self`
+and identity with `GET /api/v4/user`. It rejects inactive/revoked tokens or missing
+read permissions, then inserts or updates only the authenticated local user's
+GitLab connection. GitLab remains responsible for enforcing access to individual
+repositories on subsequent requests.
+
+Successful requests return `200` with public identity fields:
+
+```json
+{"provider":"gitlab","external_account_id":"42","external_username":"alice"}
+```
+
+Set `CONNECTOR_TOKEN_KEY` to a base64-encoded random 32-byte key, generated with
+`openssl rand -base64 32`. The token is encrypted with AES-256-GCM, including a
+random nonce and authenticated local-user/provider binding. Keep the key outside
+the database and preserve it across restarts. Hashing would prevent recovering
+the original token needed for later GitLab requests. Responses never expose it.
+
+`GITLAB_BASE_URL` defaults to `https://gitlab.com`; a self-managed instance must
+use an HTTPS origin, without a path, query, or credentials. Loopback HTTP is
+allowed for development. Without an encryption key the connector returns `503`.
+There is no OAuth application registration, callback, cookie, or refresh token.
+
+Invalid local sessions return `401`; invalid token input, rejected GitLab tokens,
+or insufficient read permissions return `400`; GitLab outages return `502`;
+database/internal failures return `500`. Unknown request fields return `422`.
+Reconnects replace only the caller's token and clear its invalidation timestamp.
+Provider token expiry is stored as midnight UTC on GitLab's expiry date (or NULL
+for a token without an expiry). Tokens must be replaced manually after expiry.
+
+Route registration lives in `src/routers/connectors/mod.rs`, matching the other
+routers. The handler, provider checks, and database persistence live in their
+respective router, connector, and database modules. The development proxy forwards
+`/connectors` to the API. Repository import and the frontend Connectors page remain
+separate work.
+
+References: [GitLab token API](https://docs.gitlab.com/api/personal_access_tokens/)
+and [read scopes](https://docs.gitlab.com/security/tokens/access_token_scopes/).

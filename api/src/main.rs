@@ -6,7 +6,8 @@ mod routers;
 mod snapshots;
 mod state;
 
-use axum::Router;
+use axum::{Extension, Router};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -17,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoding_key = state::signing_key(&secret)?;
     let decoding_key = state::decoding_key(&secret)?;
     let git = git::GitClient::from_env()?;
+    let gitlab = connectors::gitlab::authorization::GitlabAuthorization::from_env()?.map(Arc::new);
     let options = db::connection_options()?;
     let pool = db::create_pool(options).await?;
     let app_state = state::AppState {
@@ -36,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routers::projects_router())
         .merge(routers::connectors_router())
         .fallback(not_found)
+        .layer(Extension(gitlab))
         .with_state(app_state);
 
     let listener: TcpListener = TcpListener::bind("0.0.0.0:3000").await?;

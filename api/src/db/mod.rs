@@ -1,4 +1,5 @@
 mod auth;
+pub mod connectors;
 pub mod notifications;
 pub mod organizations;
 pub mod projects;
