@@ -67,6 +67,8 @@ export interface SnapshotTree {
   entries: SnapshotTreeEntry[];
 }
 
+export type SnapshotOperation = { kind: 'delete'; path: string } | { kind: 'move'; path: string; to: string };
+
 export interface SnapshotFile {
   path: string;
   content: string;
@@ -185,6 +187,12 @@ export class UsersApi {
       headers: { Authorization: `Bearer ${this.token()}` },
       params: { path },
     });
+  }
+
+  saveSnapshot(projectId: number, baseSnapshotId: number, files: { path: string; content: string }[], operations: SnapshotOperation[] = []) {
+    return this.http.post<Snapshot>(`/projects/${projectId}/snapshots`, {
+      base_snapshot_id: baseSnapshotId, files, ...(operations.length ? { operations } : {}),
+    }, { headers: { Authorization: `Bearer ${this.token()}` } });
   }
 
   markAllNotificationsAsRead() {

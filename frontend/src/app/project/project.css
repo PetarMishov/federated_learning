@@ -10,7 +10,11 @@
 .project-header,
 .project-actions,
 .snapshot-sources,
-.drawer-header {
+.drawer-header,
+.snapshot-controls,
+.snapshot-fields,
+.snapshot-picker,
+.snapshot-picker-header {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -22,32 +26,17 @@
   justify-content: space-between;
 }
 
-h1 {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 500;
-}
-
-h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 500;
-}
+h1, h2 { margin: 0; font-weight: 500; }
+h1 { font-size: 26px; }
+h2 { font-size: 18px; }
 
 .snapshot-controls {
   border: 1px solid #ccc;
   padding: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: 16px;
 }
 
 .snapshot-fields {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
   flex: 1;
 }
 
@@ -71,9 +60,6 @@ h2 {
 .snapshot-picker {
   border: 1px solid #ccc;
   padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
   gap: 12px 24px;
 }
 
@@ -83,9 +69,6 @@ h2 {
 }
 
 .snapshot-picker-header {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -161,7 +144,8 @@ button.copy-commit {
   margin-top: 16px;
 }
 
-button:focus-visible {
+button:focus-visible,
+input:focus-visible {
   outline: 2px solid #444;
   outline-offset: 4px;
 }
@@ -251,11 +235,7 @@ button[aria-pressed='true'] {
   text-align: left;
   border-color: transparent;
   overflow-wrap: anywhere;
-  cursor: pointer;
-}
-
-.file-entry:disabled {
-  cursor: default;
+  cursor: grab;
 }
 
 .file-content {
@@ -267,7 +247,7 @@ button[aria-pressed='true'] {
   tab-size: 4;
 }
 
-.editor-path {
+.editor-path, .file-create-form {
   margin-bottom: 12px;
 }
 
@@ -284,11 +264,6 @@ p {
   font-size: 14px;
   color: #555;
   overflow-wrap: anywhere;
-}
-
-input:focus-visible {
-  outline: 2px solid #444;
-  outline-offset: 4px;
 }
 
 @media (max-width: 900px) {
@@ -313,3 +288,24 @@ input:focus-visible {
     padding: 12px;
   }
 }
+
+textarea.file-content {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 400px;
+  resize: vertical;
+  border: 1px solid #ccc;
+  font-family: monospace;
+  white-space: pre;
+}
+
+.file-create-form label, .file-create-form input { display: block; margin-bottom: 6px; }
+.file-create-form input { box-sizing: border-box; }
+.file-create-form p { font-size: 12px; }
+
+.tree-chevron { width: 12px; flex-shrink: 0; }
+.file-context-menu { position: fixed; z-index: 50; min-width: 160px; padding: 4px; background: white; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 16px #0002; }
+.file-context-menu button { display: block; width: 100%; border: none; background: transparent; padding: 8px 12px; text-align: left; }
+.file-context-menu button:hover, .file-context-menu button:focus-visible { background: #eee; }
+.file-entry:focus-visible { outline: 2px solid #666; outline-offset: -2px; }

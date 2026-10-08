@@ -30,7 +30,10 @@ pub const MAX_SNAPSHOT_FILES: usize = 10_000;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveSnapshotRequest {
+    pub base_snapshot_id: Option<i32>,
     pub files: Vec<SnapshotUploadFile>,
+    #[serde(default)]
+    pub operations: Vec<crate::git::GitSnapshotOperation>,
 }
 
 #[derive(serde::Deserialize)]

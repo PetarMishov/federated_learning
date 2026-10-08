@@ -1108,6 +1108,82 @@ async fn check_save_snapshots(address: SocketAddr, pool: &PgPool, git: &crate::g
         serde_json::from_str::<Value>(&body).unwrap()["entries"],
         json!([])
     );
+    let (status, body) = request(
+        address,
+        "POST",
+        &path,
+        json!({"base_snapshot_id": first_id, "files": [], "operations": [
+            {"kind":"move", "path":"binary.bin", "to":"assets/data.bin"},
+            {"kind":"delete", "path":"train.py"}
+        ]}),
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let moved = serde_json::from_str::<Value>(&body).unwrap();
+    let moved_sha = moved["git_commit_sha"].as_str().unwrap();
+    assert!(matches!(
+        git.snapshot_file(project, moved_sha, "assets/data.bin")
+            .await,
+        Err(crate::git::GitError::UnsupportedFile)
+    ));
+    assert!(matches!(
+        git.snapshot_file(project, moved_sha, "train.py").await,
+        Err(crate::git::GitError::NotFound)
+    ));
+    assert_eq!(request(address, "POST", &path,
+        json!({"base_snapshot_id": first_id, "files": [], "operations": [{"kind":"move", "path":"binary.bin", "to":"train.py"}]}),
+        Some(&token(owner))).await.0, 400);
+    // Frontend edits use the selected snapshot as a base and preserve unopened files.
+    let (status, body) = request(
+        address,
+        "POST",
+        &path,
+        json!({"base_snapshot_id": first_id, "files": [{"path":"train.py", "content":"edited"}]}),
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let edited = serde_json::from_str::<Value>(&body).unwrap();
+    let sha = edited["git_commit_sha"].as_str().unwrap();
+    assert_eq!(
+        git.snapshot_file(project, sha, "train.py")
+            .await
+            .unwrap()
+            .content,
+        "edited"
+    );
+    assert_eq!(
+        git.snapshot_tree(project, sha, "")
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        git.snapshot_tree(project, first["git_commit_sha"].as_str().unwrap(), "")
+            .await
+            .unwrap()
+            .entries
+            .len()
+    );
+    assert!(matches!(
+        git.snapshot_file(project, sha, "binary.bin").await,
+        Err(crate::git::GitError::UnsupportedFile)
+    ));
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &path,
+            json!({"base_snapshot_id": 2147483647, "files": []}),
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(request(address, "POST", &path,
+        json!({"base_snapshot_id": first_id, "files": [{"path":"train.py/invalid", "content":"x"}]}),
+        Some(&token(owner))).await.0, 400);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deployment_runs WHERE project_id = $1")
             .bind(project)

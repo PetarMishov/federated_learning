@@ -40,7 +40,14 @@
   <div class="snapshot-picker-controls">
     <div class="snapshot-picker-header">
       <h2 id="saved-snapshots-heading">Saved snapshots</h2>
-      <button type="button" disabled title="Coming soon">Save as new snapshot</button>
+      <button type="button" (click)="saveSnapshot()" [disabled]="!snapshot() || (!changedFiles().length && !structuralChanges().length) || savingSnapshot() || movingEntry() || snapshotLoading()">
+        {{ savingSnapshot() ? 'Saving...' : 'Save as new snapshot' }}
+      </button>
+    </div>
+    <div aria-live="polite">
+      @if (changedFiles().length || structuralChanges().length) { <p>{{ changedFiles().length + structuralChanges().length }} unsaved change(s)</p> }
+      @if (saveError()) { <p role="alert">{{ saveError() }}</p> }
+      @if (saveMessage()) { <p role="status">{{ saveMessage() }}</p> }
     </div>
     <div aria-live="polite" [attr.aria-busy]="snapshotsLoading()">
       @if (snapshotsLoading() && !snapshots().length) {
@@ -50,9 +57,9 @@
       }
       @if (snapshots().length) {
         <label for="saved-snapshot">Snapshot</label>
-        <select id="saved-snapshot" #snapshotPicker [value]="selectedSnapshotId() ?? ''"
-          (change)="selectSnapshot(snapshotPicker.value ? +snapshotPicker.value : null)">
-          <option value="" [selected]="selectedSnapshotId() === null">No snapshot selected</option>
+        <select [disabled]="savingSnapshot() || movingEntry()" id="saved-snapshot" #snapshotPicker [value]="selectedSnapshotId() ?? ''"
+          (change)="selectSnapshot(+snapshotPicker.value)">
+
           @if (snapshot(); as saved) {
             @if (!selectedSnapshotIsListed()) {
               <option [value]="saved.id" selected>Snapshot #{{ saved.id }} · {{ saved.created_at | date:'short' }}</option>
@@ -123,36 +130,55 @@
           </dl>
         }
       </div>
-      <button type="button" (click)="closeSnapshot()" aria-label="Close snapshot details">Close</button>
+
     </section>
   }
 </section>
 <div class="workspace-area">
   <section class="workspace" aria-label="Project files and editor">
-    <aside class="file-explorer" aria-labelledby="explorer-heading">
+    <aside class="file-explorer" aria-labelledby="explorer-heading" (contextmenu)="showContextMenu($event)"
+      (dragover)="allowDrop($event)" (drop)="dropEntry($event)">
       <h2 id="explorer-heading">Files</h2>
       @if (snapshot(); as saved) {
         <p>Snapshot #{{ saved.id }}</p>
+        @if (creationKind(); as kind) {
+          <form class="file-create-form" (submit)="$event.preventDefault(); createEntry(entryName.value)">
+            <label for="new-entry-name">{{ kind === 'rename' ? 'New name' : kind === 'file' ? 'File name' : 'Folder name' }}</label>
+            <input id="new-entry-name" #entryName [value]="kind === 'rename' ? contextEntryName() : ''" autocomplete="off" [disabled]="savingSnapshot() || movingEntry()" />
+            <button type="submit" [disabled]="savingSnapshot() || movingEntry()">{{ kind === 'rename' ? 'Rename' : 'Create' }}</button>
+            <button type="button" (click)="creationKind.set(null)">Cancel</button>
+            @if (kind === 'folder') { <p>Empty folders are saved once they contain a file.</p> }
+            @if (creationError()) { <p role="alert">{{ creationError() }}</p> }
+          </form>
+        }
         <div class="directory-navigation">
-          @if (directoryPath()) {
-            <button type="button" (click)="browseParent()" aria-label="Go to parent folder">Up</button>
-          }
           <span>{{ directoryPath() || '/' }}</span>
         </div>
         <div aria-live="polite" [attr.aria-busy]="treeLoading()">
           @if (treeLoading()) {
             <p role="status">Loading files...</p>
-          } @else if (treeError()) {
+          }
+          @if (treeError()) {
             <p role="alert">{{ treeError() }}</p>
             <button type="button" (click)="loadTree()">Try again</button>
-          } @else {
-            <ul class="file-list">
-              @for (entry of entries(); track entry.path) {
-                <li>
-                  <button type="button" class="file-entry" (click)="openEntry(entry)"
-                    [disabled]="entry.kind === 'symlink' || entry.kind === 'submodule'"
+          }
+            <ul class="file-list" role="tree" aria-label="Snapshot files">
+              @for (entry of treeRows(); track entry.path) {
+                <li role="none">
+                  <button type="button" class="file-entry" role="treeitem" (click)="openEntry(entry)"
+                    [style.padding-left.px]="8 + entry.depth * 16"
+                    [attr.aria-level]="entry.depth + 1" [attr.data-path]="entry.path"
+                    [attr.aria-expanded]="entry.kind === 'directory' ? expandedFolders().has(entry.path) : null"
+                    [attr.aria-selected]="selectedFilePath() === entry.path"
+                    (contextmenu)="showContextMenu($event, entry)"
+                    (keydown.shift.f10)="keyboardMenu($event, entry)" (keydown)="treeKey($event, entry)"
+                    [draggable]="!savingSnapshot() && !movingEntry()"
+                    (dragstart)="startDrag($event, entry)" (dragend)="endDrag()"
+                    (dragover)="entry.kind === 'directory' && allowDrop($event)"
+                    (drop)="dropOnEntry($event, entry)"
                     [attr.aria-pressed]="entry.kind === 'file' ? selectedFilePath() === entry.path : null"
                     [attr.aria-label]="(entry.kind === 'directory' ? 'Open folder ' : 'Open file ') + entry.name">
+                    <span class="tree-chevron">{{ entry.kind === 'directory' ? (expandedFolders().has(entry.path) ? '▾' : '▸') : '·' }}</span>
                     <span>{{ entry.name }}{{ entry.kind === 'directory' ? '/' : '' }}</span>
                     @if (entry.kind === 'symlink' || entry.kind === 'submodule') {
                       <small>{{ entry.kind }}</small>
@@ -160,19 +186,30 @@
                   </button>
                 </li>
               } @empty {
-                <li><p>This folder is empty.</p></li>
+                <li role="none"><p>{{ treeLoading() ? 'Loading files...' : 'This snapshot is empty.' }}</p></li>
               }
             </ul>
-          }
+          @if (creationError() && !creationKind()) { <p role="alert">{{ creationError() }}</p> }
+          @if (movingEntry()) { <p role="status">Moving...</p> }
         </div>
       } @else {
         <p>{{ snapshotLoading() ? 'Loading snapshot...' : 'Select a saved snapshot above to browse its files.' }}</p>
+      }
+      @if (contextMenu(); as menu) {
+        <div class="file-context-menu" role="menu" aria-label="File actions" [style.left.px]="menu.x" [style.top.px]="menu.y" (click)="$event.stopPropagation()" (keydown)="menuKey($event)">
+          <button type="button" role="menuitem" (click)="contextCreate('file')">New file</button>
+          <button type="button" role="menuitem" (click)="contextCreate('folder')">New folder</button>
+          @if (menu.entry) {
+            <button type="button" role="menuitem" (click)="beginRename()">Rename</button>
+            <button type="button" role="menuitem" (click)="deleteEntry()">Delete</button>
+          }
+        </div>
       }
     </aside>
     <div class="editor" aria-labelledby="editor-heading">
       <h2 id="editor-heading">Editor</h2>
       @if (selectedFilePath(); as path) {
-        <p class="editor-path">{{ path }} · Read-only</p>
+        <p class="editor-path">{{ path }}</p>
         <div aria-live="polite" [attr.aria-busy]="fileLoading()">
           @if (fileLoading()) {
             <p role="status">Loading file...</p>
@@ -187,7 +224,9 @@
             <p role="alert">{{ fileError() }}</p>
             <button type="button" (click)="loadFile()">Try again</button>
           } @else if (file(); as opened) {
-            <pre class="file-content" tabindex="0" [attr.aria-label]="'Contents of ' + path"><code>{{ opened.content }}</code></pre>
+            <textarea class="file-content" #fileEditor [value]="opened.content"
+              (input)="editFile(fileEditor.value)" [disabled]="savingSnapshot() || movingEntry()"
+              [attr.aria-label]="'Contents of ' + path" spellcheck="false"></textarea>
             @if (opened.content === '') { <p>This file is empty.</p> }
           }
         </div>

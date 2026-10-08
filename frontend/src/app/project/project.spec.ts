@@ -282,13 +282,10 @@ describe('Project sidebars', () => {
     expect(fixture.nativeElement.querySelector('.snapshot-details')).toBeNull();
   });
 
-  it('closes snapshot details and cancels an in-flight request', async () => {
-    const fixture = await viewBaselineSnapshot();
-    const request = TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/4');
-    fixture.nativeElement.querySelector('[aria-label="Close snapshot details"]').click();
-    expect(request.cancelled).toBe(true);
-    await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('.snapshot-details')).toBeNull();
+  it('keeps a selected snapshot without a close button or an empty selector option', async () => {
+    const fixture = await loadedFiles();
+    expect(fixture.nativeElement.querySelector('[aria-label="Close snapshot details"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('#saved-snapshot option[value=""]')).toBeNull();
   });
 
   it('offers snapshot retry without reloading the deployment list', async () => {
@@ -346,7 +343,7 @@ describe('Project sidebars', () => {
     return fixture;
   }
 
-  it('copies the full saved commit and clears feedback when the snapshot is closed', async () => {
+  it('copies the full saved commit and clears feedback when switching snapshots', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     const fixture = await loadedFiles();
@@ -354,13 +351,11 @@ describe('Project sidebars', () => {
     await fixture.whenStable();
     expect(writeText).toHaveBeenCalledWith(savedSnapshot.git_commit_sha);
     expect(fixture.nativeElement.querySelector('.commit-copy-message').textContent).toBe('Copied!');
-    fixture.nativeElement.querySelector('[aria-label="Close snapshot details"]').click();
-    fixture.detectChanges();
     const picker = fixture.nativeElement.querySelector('#saved-snapshot');
-    picker.value = '4';
+    picker.value = '5';
     picker.dispatchEvent(new Event('change'));
-    TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
-    flushTree();
+    TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/5').flush({ ...savedSnapshot, id: 5 });
+    flushTree(5, '', rootEntries);
     await fixture.whenStable();
     expect(fixture.nativeElement.querySelector('.commit-copy-message').textContent).toBe('');
   });
@@ -395,29 +390,28 @@ describe('Project sidebars', () => {
     expect(fixture.nativeElement.querySelector('.commit-copy-message').textContent).toContain('Could not copy.');
   });
 
-  it('shows snapshot files on project load and keeps unsupported links disabled', async () => {
+  it('shows snapshot files on project load and shows unsupported links as tree entries', async () => {
     const fixture = await loadedFiles();
     const explorer = fixture.nativeElement.querySelector('.file-explorer');
     expect(explorer.textContent).toContain('Snapshot #4');
     expect(explorer.textContent).toContain('README.md');
     expect(explorer.textContent).toContain('src/');
-    expect(explorer.querySelector('[aria-label="Open file link"]').disabled).toBe(true);
+    expect(explorer.querySelector('[aria-label="Open file link"]').textContent).toContain('symlink');
     TestBed.inject(HttpTestingController).expectNone((request) => request.url.endsWith('/file'));
   });
 
-  it('browses nested folders and navigates back to the root', async () => {
+  it('browses nested folders and collapses them while keeping the root visible', async () => {
     const fixture = await loadedFiles();
     fixture.nativeElement.querySelector('[aria-label="Open folder src"]').click();
     flushTree(4, 'src', [{ name: 'space name.txt', path: 'src/space name.txt', kind: 'file' }]);
     await fixture.whenStable();
     expect(fixture.nativeElement.querySelector('.file-explorer').textContent).toContain('space name.txt');
-    fixture.nativeElement.querySelector('[aria-label="Go to parent folder"]').click();
-    flushTree(4, '', rootEntries);
+    fixture.nativeElement.querySelector('[data-path="src"]').click();
     await fixture.whenStable();
     expect(fixture.nativeElement.querySelector('.file-explorer').textContent).toContain('README.md');
   });
 
-  it('fetches a clicked file and displays its contents as escaped read-only text', async () => {
+  it('fetches a clicked file and displays its contents as editable plain text', async () => {
     const fixture = await loadedFiles();
     fixture.nativeElement.querySelector('[aria-label="Open folder src"]').click();
     flushTree(4, 'src', [{ name: 'space name.txt', path: 'src/space name.txt', kind: 'file' }]);
@@ -429,9 +423,9 @@ describe('Project sidebars', () => {
     request.flush({ path: 'src/space name.txt', content });
     await fixture.whenStable();
     const editor = fixture.nativeElement.querySelector('.editor');
-    expect(editor.querySelector('pre code').textContent).toBe(content);
+    expect(editor.querySelector('textarea').value).toBe(content);
     expect(editor.querySelector('script')).toBeNull();
-    expect(editor.textContent).toContain('Read-only');
+    expect(editor.querySelector('textarea').disabled).toBe(false);
   });
 
   it('cancels a stale file request when another file is clicked', async () => {
@@ -442,7 +436,7 @@ describe('Project sidebars', () => {
     expect(first.cancelled).toBe(true);
     fileRequest('train.py').flush({ path: 'train.py', content: "print('snapshot')" });
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('.editor pre').textContent).toBe("print('snapshot')");
+    expect(fixture.nativeElement.querySelector('.editor textarea').value).toBe("print('snapshot')");
   });
 
   it('cancels directory and file requests when switching snapshots', async () => {
@@ -457,7 +451,7 @@ describe('Project sidebars', () => {
     TestBed.inject(HttpTestingController).expectOne('/projects/7/snapshots/5').flush({ ...savedSnapshot, id: 5 });
     flushTree(5);
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('.editor pre')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.editor textarea')).toBeNull();
     expect(fixture.nativeElement.querySelector('.file-explorer').textContent).toContain('Snapshot #5');
   });
 
@@ -493,7 +487,7 @@ describe('Project sidebars', () => {
     const download = fixture.nativeElement.querySelector('.editor [aria-live] button');
     expect(download.textContent).toBe('Download file');
     expect(download.disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.editor pre')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.editor textarea')).toBeNull();
     fixture.nativeElement.querySelector('[aria-label="Open file train.py"]').click();
     fileRequest('train.py').flush({ path: 'train.py', content: '' });
     await fixture.whenStable();
@@ -556,25 +550,15 @@ describe('Project sidebars', () => {
     expect(picker.value).toBe('5');
   });
 
-  it('keeps a closed snapshot closed when the deployment request finishes', async () => {
+  it('keeps the selected snapshot when the deployment request finishes', async () => {
     const fixture = openDeployments([savedSnapshot]);
     const http = TestBed.inject(HttpTestingController);
     http.expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
     flushTree(4, '', rootEntries);
-    await fixture.whenStable();
-    fixture.nativeElement.querySelector('[aria-label="Close snapshot details"]').click();
     http.expectOne('/projects/7/deployments').flush({ deployments: [baseline] });
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('.snapshot-details')).toBeNull();
-    expect(fixture.nativeElement.querySelector('#saved-snapshot').value).toBe('');
+    expect(fixture.nativeElement.querySelector('#saved-snapshot').value).toBe('4');
     http.expectNone('/projects/7/snapshots/4');
-    const picker = fixture.nativeElement.querySelector('#saved-snapshot');
-    picker.value = '4';
-    picker.dispatchEvent(new Event('change'));
-    http.expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
-    flushTree();
-    await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('.snapshot-details')).not.toBeNull();
   });
 
   it('shows an empty snapshot list independently of existing deployments', async () => {
@@ -603,7 +587,7 @@ describe('Project sidebars', () => {
     button.click();
     snapshotListRequest('7', 1).flush({ snapshots: [{ ...savedSnapshot, id: 3 }], has_more: false });
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelectorAll('#saved-snapshot option').length).toBe(3);
+    expect(fixture.nativeElement.querySelectorAll('#saved-snapshot option').length).toBe(2);
     expect(fixture.nativeElement.querySelector('#saved-snapshot').value).toBe('4');
     http.expectNone('/projects/7/snapshots/3');
   });
@@ -623,6 +607,324 @@ describe('Project sidebars', () => {
     await fixture.whenStable();
     expect(fixture.nativeElement.querySelector('.snapshot-details').textContent).toContain('Snapshot #4');
     http.expectNone('/projects/7/deployments');
+  });
+
+  it('keeps edits across files, saves only changes against the base, and selects the new snapshot', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    const button = () => fixture.nativeElement.querySelector('.snapshot-picker-header button');
+    expect(button().disabled).toBe(true);
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original' });
+    await fixture.whenStable();
+    const edit = (content: string) => {
+      const textarea = fixture.nativeElement.querySelector('.editor textarea');
+      textarea.value = content;
+      textarea.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+    };
+    edit('changed');
+    expect(button().disabled).toBe(false);
+    edit('original');
+    expect(button().disabled).toBe(true);
+    edit('changed');
+    fixture.nativeElement.querySelector('[aria-label="Open file train.py"]').click();
+    fileRequest('train.py').flush({ path: 'train.py', content: 'print(1)' });
+    await fixture.whenStable();
+    edit('print(2)');
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('changed');
+    button().click();
+    fixture.detectChanges();
+    expect(button().disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('textarea').disabled).toBe(true);
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.headers.get('Authorization')).toBe('Bearer saved-token');
+    expect(request.request.body).toEqual({ base_snapshot_id: 4, files: [
+      { path: 'README.md', content: 'changed' }, { path: 'train.py', content: 'print(2)' },
+    ] });
+    const created = { ...savedSnapshot, id: 6 };
+    request.flush(created);
+    http.expectOne('/projects/7/snapshots/6').flush(created);
+    flushTree(6, '', rootEntries);
+    fileRequest('README.md', 6).flush({ path: 'README.md', content: 'changed' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('#saved-snapshot').value).toBe('6');
+    expect(button().disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('Snapshot saved.');
+  });
+
+  it('keeps edited contents and allows retry after a failed save', async () => {
+    const fixture = await loadedFiles();
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original' });
+    await fixture.whenStable();
+    const textarea = fixture.nativeElement.querySelector('textarea');
+    textarea.value = 'edited';
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    TestBed.inject(HttpTestingController).expectOne({ method: 'POST', url: '/projects/7/snapshots' })
+      .flush('Failed', { status: 500, statusText: 'Error' });
+    await fixture.whenStable();
+    expect(textarea.value).toBe('edited');
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(false);
+    expect(fixture.nativeElement.textContent).toContain('Your edits are kept');
+  });
+
+  it('restores unsaved drafts after switching snapshots and preserves CRLF', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original\r\n' });
+    await fixture.whenStable();
+    const textarea = fixture.nativeElement.querySelector('textarea');
+    textarea.value = 'edited\n';
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const picker = fixture.nativeElement.querySelector('#saved-snapshot');
+    picker.value = '5';
+    picker.dispatchEvent(new Event('change'));
+    http.expectOne('/projects/7/snapshots/5').flush({ ...savedSnapshot, id: 5 });
+    flushTree(5, '', rootEntries);
+    await fixture.whenStable();
+    picker.value = '4';
+    picker.dispatchEvent(new Event('change'));
+    http.expectOne('/projects/7/snapshots/4').flush(savedSnapshot);
+    flushTree(4, '', rootEntries);
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original\r\n' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('edited\n');
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.body.files).toEqual([{ path: 'README.md', content: 'edited\r\n' }]);
+    request.flush('Unavailable', { status: 500, statusText: 'Error' });
+  });
+
+  it('cancels the save response when navigating to a different project', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    fixture.nativeElement.querySelector('[aria-label="Open file README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'original' });
+    await fixture.whenStable();
+    const textarea = fixture.nativeElement.querySelector('textarea');
+    textarea.value = 'edited';
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    params.next(convertToParamMap({ orgId: '3', id: '8' }));
+    expect(request.cancelled).toBe(true);
+    snapshotListRequest('8').flush({ snapshots: [], has_more: false });
+    http.expectOne('/projects/8/deployments').flush({ deployments: [] });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).not.toContain('unsaved change(s)');
+  });
+
+  it('creates a nested draft file, opens it locally and saves it against the selected snapshot', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    const create = (kind: string, name: string) => {
+      contextCreation(fixture, fixture.nativeElement.querySelector('.directory-navigation span').textContent.trim() === '/' ? null : 'models', kind);
+      fixture.nativeElement.querySelector('#new-entry-name').value = name;
+      fixture.nativeElement.querySelector('.file-create-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      fixture.detectChanges();
+    };
+    create('New folder', 'models');
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(true);
+    fixture.nativeElement.querySelector('[aria-label="Open folder models"]').click();
+    await fixture.whenStable();
+    http.expectNone((request) => request.url.endsWith('/tree'));
+    create('New file', 'train.py');
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('');
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(false);
+    http.expectNone((request) => request.url.endsWith('/file'));
+    const textarea = fixture.nativeElement.querySelector('textarea');
+    textarea.value = 'print(42)';
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[data-path="models"]').click();
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('[aria-label="Open folder models"]').click();
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('[data-path="models/train.py"]').click();
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('print(42)');
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.body).toEqual({ base_snapshot_id: 4, files: [{ path: 'models/train.py', content: 'print(42)' }] });
+    const created = { ...savedSnapshot, id: 6 };
+    request.flush(created);
+    http.expectOne('/projects/7/snapshots/6').flush(created);
+    flushTree(6, '', [...rootEntries, { name: 'models', path: 'models', kind: 'directory' }]);
+    fileRequest('models/train.py', 6).flush({ path: 'models/train.py', content: 'print(42)' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(true);
+  });
+
+  it('rejects duplicate and unsafe entry names and counts empty new files as changes', async () => {
+    const fixture = await loadedFiles();
+    contextCreation(fixture, null, 'New file');
+    const input = fixture.nativeElement.querySelector('#new-entry-name');
+    const form = fixture.nativeElement.querySelector('.file-create-form');
+    for (const name of ['../bad', '.git', 'README.md']) {
+      input.value = name;
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+      fixture.detectChanges();
+      expect(form.querySelector('[role="alert"]')).not.toBeNull();
+    }
+    input.value = 'empty.txt';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[aria-label="Open file empty.txt"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(false);
+  });
+
+  function contextCreation(fixture: ReturnType<typeof TestBed.createComponent<ProjectPage>>, path: string | null, action: string) {
+    const target = path === null ? fixture.nativeElement.querySelector('.file-explorer')
+      : fixture.nativeElement.querySelector(`[data-path="${path}"]`);
+    target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+    [...fixture.nativeElement.querySelectorAll('[role="menuitem"]')]
+      .find((button: any) => button.textContent.trim() === action).click();
+    if (path === null) flushTree(4, '', rootEntries);
+    fixture.detectChanges();
+  }
+
+  function contextAction(fixture: ReturnType<typeof TestBed.createComponent<ProjectPage>>, path: string, action: string) {
+    fixture.nativeElement.querySelector(`[data-path="${path}"]`).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+    const menu = fixture.nativeElement.querySelector('[role="menu"]');
+    [...menu.querySelectorAll('button')].find((button: any) => button.textContent.trim() === action).click();
+    fixture.detectChanges();
+  }
+  function submitName(fixture: ReturnType<typeof TestBed.createComponent<ProjectPage>>, name: string) {
+    fixture.nativeElement.querySelector('#new-entry-name').value = name;
+    fixture.nativeElement.querySelector('.file-create-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    fixture.detectChanges();
+  }
+
+  it('renders nested folders as an expandable tree and collapses without fetching again', async () => {
+    const fixture = await loadedFiles();
+    fixture.nativeElement.querySelector('[data-path="src"]').click();
+    flushTree(4, 'src', [{ name: 'main.py', path: 'src/main.py', kind: 'file' }]);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[data-path="README.md"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-path="src"]').getAttribute('aria-expanded')).toBe('true');
+    expect(fixture.nativeElement.querySelector('[data-path="src/main.py"]').getAttribute('aria-level')).toBe('2');
+    fixture.nativeElement.querySelector('[data-path="src"]').click();
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[data-path="src/main.py"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-path="src"]').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('renames an edited file and deletes an unopened folder in the next snapshot', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    fixture.nativeElement.querySelector('[data-path="README.md"]').click();
+    fileRequest('README.md').flush({ path: 'README.md', content: 'old' });
+    await fixture.whenStable();
+    const textarea = fixture.nativeElement.querySelector('textarea');
+    textarea.value = 'edited'; textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    contextAction(fixture, 'README.md', 'Rename');
+    submitName(fixture, 'notes.md');
+    fileRequest('README.md').flush({ path: 'README.md', content: 'old' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('edited');
+    expect(fixture.nativeElement.querySelector('.editor-path').textContent).toBe('notes.md');
+    expect(fixture.nativeElement.querySelector('[data-path="README.md"]')).toBeNull();
+    contextAction(fixture, 'src', 'Delete');
+    expect(fixture.nativeElement.querySelector('[data-path="src"]')).toBeNull();
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.body).toEqual({ base_snapshot_id: 4, files: [{ path: 'notes.md', content: 'edited' }], operations: [
+      { kind: 'move', path: 'README.md', to: 'notes.md' }, { kind: 'delete', path: 'src' },
+    ] });
+    request.flush('Unavailable', { status: 500, statusText: 'Error' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[data-path="notes.md"]')).not.toBeNull();
+  });
+
+  it('moves a file by dragging into an unloaded folder and saves without downloading its contents', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    fixture.nativeElement.querySelector('[data-path="README.md"]').dispatchEvent(new Event('dragstart', { bubbles: true }));
+    fixture.nativeElement.querySelector('[data-path="src"]').dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    flushTree(4, 'src', []);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[data-path="README.md"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-path="src/README.md"]')).not.toBeNull();
+    http.expectNone((request) => request.url.endsWith('/file'));
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.body).toEqual({ base_snapshot_id: 4, files: [], operations: [{ kind: 'move', path: 'README.md', to: 'src/README.md' }] });
+    request.flush('Unavailable', { status: 500, statusText: 'Error' });
+  });
+
+  it('rejects rename collisions and dragging a folder into itself', async () => {
+    const fixture = await loadedFiles();
+    contextAction(fixture, 'README.md', 'Rename');
+    submitName(fixture, 'train.py');
+    expect(fixture.nativeElement.textContent).toContain('already exists');
+    fixture.nativeElement.querySelector('.file-create-form button[type="button"]').click();
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[data-path="src"]').dispatchEvent(new Event('dragstart', { bubbles: true }));
+    fixture.nativeElement.querySelector('[data-path="src"]').dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    await fixture.whenStable();
+    expect(fixture.nativeElement.textContent).toContain('cannot be moved into itself');
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(true);
+  });
+
+  it('creates from the context menu and deletes new files without leaving a save operation', async () => {
+    const fixture = await loadedFiles();
+    fixture.nativeElement.querySelector('.file-explorer').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+    [...fixture.nativeElement.querySelectorAll('[role="menuitem"]')].find((button: any) => button.textContent.trim() === 'New file').click();
+    flushTree(4, '', rootEntries);
+    await fixture.whenStable();
+    submitName(fixture, 'temporary.txt');
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea').value).toBe('');
+    contextAction(fixture, 'temporary.txt', 'Delete');
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('textarea')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-path="temporary.txt"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(true);
+  });
+
+  it('saves a moved base file inside a new draft folder and loads that folder from the new snapshot', async () => {
+    const fixture = await loadedFiles();
+    const http = TestBed.inject(HttpTestingController);
+    contextCreation(fixture, null, 'New folder');
+    submitName(fixture, 'models');
+    fixture.nativeElement.querySelector('[data-path="README.md"]').dispatchEvent(new Event('dragstart', { bubbles: true }));
+    fixture.nativeElement.querySelector('[data-path="models"]').dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    await fixture.whenStable();
+    contextAction(fixture, 'models', 'Rename');
+    submitName(fixture, 'saved');
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const request = http.expectOne({ method: 'POST', url: '/projects/7/snapshots' });
+    expect(request.request.body.operations).toEqual([
+      { kind: 'move', path: 'README.md', to: 'models/README.md' },
+      { kind: 'move', path: 'models', to: 'saved' },
+    ]);
+    const created = { ...savedSnapshot, id: 6 };
+    request.flush(created);
+    http.expectOne('/projects/7/snapshots/6').flush(created);
+    flushTree(6, '', [{ name: 'saved', path: 'saved', kind: 'directory' }]);
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('[data-path="saved"]').click();
+    flushTree(6, 'saved', [{ name: 'README.md', path: 'saved/README.md', kind: 'file' }]);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('[data-path="saved/README.md"]')).not.toBeNull();
   });
 
 });

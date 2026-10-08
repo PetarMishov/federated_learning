@@ -118,13 +118,13 @@ Database failures return `500` without exposing internal errors.
 
 On the frontend project page, the newest saved snapshot is selected automatically,
 including projects with no deployments. Use **Saved snapshots** to select any
-loaded version; **Load older snapshots** fetches more when needed. **Close** clears
-the viewer and leaves the selection empty until you choose another snapshot.
+loaded version; **Load older snapshots** fetches more when needed. The selector
+always keeps a saved version selected when snapshots are available.
 Deployment loading does not change snapshot selection. A deployment's **View snapshot**
 button remains a shortcut to its specific version. Compact details beside the
 **Saved snapshots** selector show the saved date, source, and stored commit ID,
 plus original branch/commit when available. Full commit IDs appear on hover. It supports
-retry and close and returns to login on an expired session.
+retry and returns to login on an expired session.
 
 ## Snapshot list
 
@@ -170,11 +170,15 @@ with JSON containing `error: "preview_too_large"`, `size_bytes`, and
 disabled **Download file** placeholder until file downloads are implemented.
 Storage failures return `500` without exposing Git stderr or host paths.
 
-The Files pane loads the selected snapshot's root directory. Click folders to
-browse, use **Up** to return to a parent directory, and click a file to show its
-contents in the read-only editor. Contents are rendered as escaped text. Loading
-and retry states are independent for folders and files; changing snapshots or
-projects cancels outstanding reads and clears previous contents.
+The Files pane shows an expandable tree. Click folder arrows to expand or collapse
+children; parent folders remain visible. Click files to edit their text. Right-click
+an entry (or use Shift+F10) for **New file**, **New folder**, **Rename**, and **Delete**.
+Right-click the background to create an entry at the root. Drag files or folders
+onto folders to move them, or onto the background to move them to the root.
+Names cannot overwrite other entries, and folders cannot move into themselves.
+All changes remain drafts until saved. Arrow keys navigate the tree. Folder/file
+reads have independent retry states and are cancelled when changing snapshots or
+projects. Drafts survive switching snapshots within the project.
 
 ## Save a snapshot
 
@@ -192,10 +196,41 @@ file tree as JSON:
 }
 ```
 
+To edit an existing snapshot, include `base_snapshot_id` and send only changed files:
+
+```json
+{"base_snapshot_id": 4, "files": [{"path": "train.py", "content": "print('edited')\n"}]}
+```
+
+The base must belong to this project. Existing regular files can be replaced and new files can be added, including in
+new directories. Files cannot replace directories, symlinks or submodules, and
+parent paths cannot traverse files, symlinks or submodules.
+Untouched files (including binary files, large files, symlinks and submodules) and
+existing executable modes are preserved. The base snapshot remains immutable.
+Without `base_snapshot_id`, the request represents the complete replacement tree.
+
+Optional `operations` are applied in order to the base tree before uploading file
+contents. Rename and drag moves use `move`; deleting a directory removes its entire
+subtree. No file downloads are needed, so binary bytes, symlinks, submodules, and
+executable modes survive moves. Sources must exist and destinations must be vacant.
+Tree operations require `base_snapshot_id` and are limited to 10000 per request.
+
+```json
+{
+  "base_snapshot_id": 4,
+  "operations": [
+    {"kind": "move", "path": "src", "to": "lib"},
+    {"kind": "delete", "path": "obsolete.py"}
+  ],
+  "files": [{"path": "lib/train.py", "content": "print('edited')\n"}]
+}
+```
+
 Each file must specify exactly one of `content` (UTF-8 text) or
 `content_base64` (standard padded base64 for arbitrary bytes). `executable`
-defaults to `false`. Omitted files are absent from the new snapshot; earlier
-snapshots remain intact. An empty `files` array saves an empty Git tree.
+defaults to `false`. Without a base, omitted files are absent from the new snapshot
+and an empty `files` array saves an empty Git tree. With a base, omitted files remain
+unless deleted by an operation. Earlier snapshots always remain intact.
 Uploads are recorded as `source: "local"`; provider imports and source provenance
 are separate future work. Include project code only, excluding local datasets.
 
@@ -223,8 +258,13 @@ Missing/invalid/revoked credentials return `401`; unavailable projects or missin
 editing permission return `404`; invalid file paths/content return `400`;
 invalid JSON structure/unknown fields return `422` (malformed JSON returns `400`);
 upload limits return `413`; storage/database failures return a generic `500`.
-Saving a snapshot does not create or replace deployments. The frontend upload
-controls and **Save as new snapshot** button remain placeholders.
+Saving a snapshot does not create or replace deployments. The frontend enables
+**Save as new snapshot** for added/edited files, moves, renames, or deletions.
+The Files window can create draft files and folders in the current directory.
+New files open immediately and enable saving even when empty. Empty folders remain
+in the draft until they contain a file, because Git does not store empty folders.
+Successful saves select the new snapshot and reopen the edited file; failed saves
+keep drafts for retry. Import controls remain placeholders.
 
 ## Snapshot placeholders
 

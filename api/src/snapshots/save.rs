@@ -32,15 +32,45 @@ pub async fn save_snapshot(
     {
         return Err(NO_ACCESS);
     }
+    let base_commit = match request.base_snapshot_id {
+        Some(id) => Some(
+            snapshots::get_snapshot(&state.pool, project_id, id, user_id)
+                .await
+                .map_err(|_| SAVE_FAILED)?
+                .ok_or((StatusCode::NOT_FOUND, "Base snapshot not found."))?
+                .git_commit_sha,
+        ),
+        None => None,
+    };
+    if request.operations.len() > MAX_SNAPSHOT_FILES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Too many tree operations."));
+    }
+    let operations = request.operations.clone();
     let files = decode_files(request)?;
-    let commit_sha = state
-        .git
-        .capture_snapshot(project_id, files)
-        .await
-        .map_err(|error| match error {
-            GitError::InvalidInput(message) => (StatusCode::BAD_REQUEST, message),
-            _ => SAVE_FAILED,
-        })?;
+    let captured = if operations.is_empty() {
+        match base_commit.as_deref() {
+            Some(base) => {
+                state
+                    .git
+                    .capture_snapshot_changes(project_id, Some(base), files)
+                    .await
+            }
+            None => state.git.capture_snapshot(project_id, files).await,
+        }
+    } else {
+        state
+            .git
+            .capture_snapshot_patch(project_id, base_commit.as_deref(), files, operations)
+            .await
+    };
+    let commit_sha = captured.map_err(|error| match error {
+        GitError::NotFound => (
+            StatusCode::BAD_REQUEST,
+            "Edited path not found in base snapshot.",
+        ),
+        GitError::InvalidInput(message) => (StatusCode::BAD_REQUEST, message),
+        _ => SAVE_FAILED,
+    })?;
     let mut transaction = state.pool.begin().await.map_err(|_| SAVE_FAILED)?;
     lock_project(&mut transaction, project_id)
         .await

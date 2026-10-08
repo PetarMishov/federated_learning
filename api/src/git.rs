@@ -107,6 +107,13 @@ pub struct GitSnapshotFile {
     pub executable: bool,
 }
 
+#[derive(Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GitSnapshotOperation {
+    Delete { path: String },
+    Move { path: String, to: String },
+}
+
 struct CaptureDirectory(PathBuf);
 
 impl Drop for CaptureDirectory {
@@ -498,7 +505,127 @@ impl GitClient {
         project_id: i32,
         files: Vec<GitSnapshotFile>,
     ) -> Result<String, GitError> {
+        self.capture_snapshot_changes(project_id, None, files).await
+    }
+
+    /// Apply replacements to an immutable base tree, preserving untouched objects and modes.
+    pub async fn capture_snapshot_changes(
+        &self,
+        project_id: i32,
+        base_commit: Option<&str>,
+        files: Vec<GitSnapshotFile>,
+    ) -> Result<String, GitError> {
+        self.capture_snapshot_patch(project_id, base_commit, files, vec![])
+            .await
+    }
+
+    pub async fn capture_snapshot_patch(
+        &self,
+        project_id: i32,
+        base_commit: Option<&str>,
+        mut files: Vec<GitSnapshotFile>,
+        operations: Vec<GitSnapshotOperation>,
+    ) -> Result<String, GitError> {
         validate_upload_paths(&files)?;
+        if base_commit.is_none() && !operations.is_empty() {
+            return Err(GitError::InvalidInput(
+                "Tree operations require a base snapshot",
+            ));
+        }
+        let mut base = std::collections::BTreeMap::new();
+        if let Some(sha) = base_commit {
+            let tree = self.directory_oid(project_id, sha, "").await?;
+            let output = self
+                .object_command(project_id, &["ls-tree", "-r", "-z", &tree])
+                .await?;
+            for record in output
+                .split(|byte| *byte == 0)
+                .filter(|record| !record.is_empty())
+            {
+                let record = std::str::from_utf8(record)
+                    .map_err(|_| GitError::InvalidData("Invalid Git filename"))?;
+                let (metadata, path) = record
+                    .split_once('\t')
+                    .ok_or(GitError::InvalidData("Invalid Git tree"))?;
+                let fields = metadata.split_whitespace().collect::<Vec<_>>();
+                if fields.len() != 3 {
+                    return Err(GitError::InvalidData("Invalid Git tree"));
+                }
+                base.insert(
+                    path.to_owned(),
+                    (fields[0].to_owned(), fields[2].to_owned()),
+                );
+            }
+        }
+        for operation in operations {
+            let (path, destination) = match operation {
+                GitSnapshotOperation::Delete { path } => (path, None),
+                GitSnapshotOperation::Move { path, to } => (path, Some(to)),
+            };
+            validate_upload_paths(&[GitSnapshotFile {
+                path: path.clone(),
+                content: vec![],
+                executable: false,
+            }])?;
+            let affected = base
+                .keys()
+                .filter(|key| path_contains(&path, key))
+                .cloned()
+                .collect::<Vec<_>>();
+            if affected.is_empty() {
+                return Err(GitError::InvalidInput(
+                    "Tree operation source does not exist",
+                ));
+            }
+            if let Some(to) = destination {
+                validate_upload_paths(&[GitSnapshotFile {
+                    path: to.clone(),
+                    content: vec![],
+                    executable: false,
+                }])?;
+                if path_contains(&path, &to) {
+                    return Err(GitError::InvalidInput("Cannot move a path into itself"));
+                }
+                if base
+                    .keys()
+                    .any(|key| path_contains(&to, key) || path_contains(key, &to))
+                {
+                    return Err(GitError::InvalidInput(
+                        "Move destination already exists or has a non-directory parent",
+                    ));
+                }
+                for source in affected {
+                    let target = format!("{to}{}", &source[path.len()..]);
+                    validate_upload_paths(&[GitSnapshotFile {
+                        path: target.clone(),
+                        content: vec![],
+                        executable: false,
+                    }])?;
+                    let object = base.remove(&source).unwrap();
+                    base.insert(target, object);
+                }
+            } else {
+                for source in affected {
+                    base.remove(&source);
+                }
+            }
+        }
+        for file in &mut files {
+            if base.keys().any(|path| {
+                path != &file.path
+                    && (path_contains(&file.path, path) || path_contains(path, &file.path))
+            }) {
+                return Err(GitError::InvalidInput(
+                    "A file conflicts with an existing path",
+                ));
+            }
+            if let Some((mode, _)) = base.get(&file.path) {
+                if mode != "100644" && mode != "100755" {
+                    return Err(GitError::InvalidInput("Only regular files can be edited"));
+                }
+                file.executable = mode == "100755";
+            }
+        }
         let repository = self.repository_path(project_id)?;
         if self
             .object_command(project_id, &["rev-parse", "--is-bare-repository"])
@@ -550,6 +677,9 @@ impl GitClient {
         .await
         .map_err(|_| GitError::InvalidData("Snapshot capture task failed"))??;
         let mut index_info = Vec::new();
+        for (path, (mode, oid)) in base {
+            index_info.extend_from_slice(format!("{mode} {oid}\t{path}\0").as_bytes());
+        }
         // Numbered private temporary files avoid interpreting uploaded names as
         // host paths. --no-filters preserves even .gitattributes-controlled bytes.
         for (batch, chunk) in names.chunks(128).enumerate() {
@@ -585,7 +715,8 @@ impl GitClient {
         empty
             .arg("--git-dir")
             .arg(&repository)
-            .args(["read-tree", "--empty"])
+            .arg("read-tree")
+            .arg("--empty")
             .env("GIT_INDEX_FILE", &index);
         run(empty).await?;
         let mut update = self.command();
@@ -790,9 +921,288 @@ async fn run_with_input(mut command: Command, input: &[u8]) -> Result<Vec<u8>, G
     Ok(output.stdout)
 }
 
+fn path_contains(parent: &str, path: &str) -> bool {
+    path == parent
+        || path
+            .strip_prefix(parent)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tree_operations_move_binary_subtrees_preserve_modes_and_keep_old_snapshots() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let file = |path: &str, content: &[u8], executable| GitSnapshotFile {
+            path: path.into(),
+            content: content.to_vec(),
+            executable,
+        };
+        let first = client
+            .capture_snapshot(
+                42,
+                vec![
+                    file("src/run.sh", b"old", true),
+                    file("src/data.bin", &[0, 255], false),
+                    file("remove.txt", b"gone", false),
+                    file("keep.txt", b"keep", false),
+                ],
+            )
+            .await
+            .unwrap();
+        let edited = client
+            .capture_snapshot_patch(
+                42,
+                Some(&first),
+                vec![file("lib/run.sh", b"edited", false)],
+                vec![
+                    GitSnapshotOperation::Move {
+                        path: "src".into(),
+                        to: "lib".into(),
+                    },
+                    GitSnapshotOperation::Delete {
+                        path: "remove.txt".into(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .snapshot_file(42, &edited, "lib/run.sh")
+                .await
+                .unwrap()
+                .content,
+            "edited"
+        );
+        assert_eq!(
+            client
+                .object_command(42, &["show", &format!("{edited}:lib/data.bin")])
+                .await
+                .unwrap(),
+            [0, 255]
+        );
+        assert!(
+            client
+                .object_command(42, &["ls-tree", &edited, "lib/run.sh"])
+                .await
+                .unwrap()
+                .starts_with(b"100755 blob ")
+        );
+        assert!(matches!(
+            client.snapshot_file(42, &edited, "remove.txt").await,
+            Err(GitError::NotFound)
+        ));
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "src/run.sh")
+                .await
+                .unwrap()
+                .content,
+            "old"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "remove.txt")
+                .await
+                .unwrap()
+                .content,
+            "gone"
+        );
+        for (path, to) in [
+            ("src", "src/inside"),
+            ("src", "keep.txt"),
+            ("keep.txt", "src"),
+            ("src", "../outside"),
+            ("missing", "new"),
+        ] {
+            assert!(matches!(
+                client
+                    .capture_snapshot_patch(
+                        42,
+                        Some(&first),
+                        vec![],
+                        vec![GitSnapshotOperation::Move {
+                            path: path.into(),
+                            to: to.into()
+                        }]
+                    )
+                    .await,
+                Err(GitError::InvalidInput(_))
+            ));
+        }
+        let emptied = client
+            .capture_snapshot_patch(
+                42,
+                Some(&first),
+                vec![],
+                vec![GitSnapshotOperation::Delete { path: "src".into() }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .snapshot_tree(42, &emptied, "")
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_additions_preserve_base_files_and_reject_path_collisions() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let file = |path: &str, content: &[u8]| GitSnapshotFile {
+            path: path.into(),
+            content: content.to_vec(),
+            executable: false,
+        };
+        let first = client
+            .capture_snapshot(
+                42,
+                vec![file("keep.txt", b"original"), file("src/main.py", b"code")],
+            )
+            .await
+            .unwrap();
+        let added = client
+            .capture_snapshot_changes(
+                42,
+                Some(&first),
+                vec![
+                    file("models/nested/new.py", b"new"),
+                    file("src/empty.txt", b""),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .snapshot_file(42, &added, "keep.txt")
+                .await
+                .unwrap()
+                .content,
+            "original"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &added, "models/nested/new.py")
+                .await
+                .unwrap()
+                .content,
+            "new"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &added, "src/empty.txt")
+                .await
+                .unwrap()
+                .content,
+            ""
+        );
+        assert!(matches!(
+            client
+                .snapshot_file(42, &first, "models/nested/new.py")
+                .await,
+            Err(GitError::NotFound)
+        ));
+        for path in ["src", "keep.txt/child.txt"] {
+            assert!(matches!(
+                client
+                    .capture_snapshot_changes(42, Some(&first), vec![file(path, b"bad")])
+                    .await,
+                Err(GitError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn editing_a_snapshot_preserves_unopened_objects_and_executable_modes() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let first = client
+            .capture_snapshot(
+                42,
+                vec![
+                    GitSnapshotFile {
+                        path: "run.sh".into(),
+                        content: b"old".to_vec(),
+                        executable: true,
+                    },
+                    GitSnapshotFile {
+                        path: "binary.bin".into(),
+                        content: vec![0, 255, 1],
+                        executable: false,
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        let edited = client
+            .capture_snapshot_changes(
+                42,
+                Some(&first),
+                vec![GitSnapshotFile {
+                    path: "run.sh".into(),
+                    content: b"new".to_vec(),
+                    executable: false,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .snapshot_file(42, &edited, "run.sh")
+                .await
+                .unwrap()
+                .content,
+            "new"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "run.sh")
+                .await
+                .unwrap()
+                .content,
+            "old"
+        );
+        assert_eq!(
+            client
+                .object_command(42, &["show", &format!("{edited}:binary.bin")])
+                .await
+                .unwrap(),
+            [0, 255, 1]
+        );
+        assert!(
+            client
+                .object_command(42, &["ls-tree", &edited, "run.sh"])
+                .await
+                .unwrap()
+                .starts_with(b"100755 blob ")
+        );
+        assert!(
+            client
+                .capture_snapshot_changes(
+                    42,
+                    Some(&first),
+                    vec![GitSnapshotFile {
+                        path: "missing".into(),
+                        content: vec![],
+                        executable: false
+                    },]
+                )
+                .await
+                .is_ok()
+        );
+    }
 
     #[tokio::test]
     async fn uploaded_snapshots_preserve_raw_bytes_modes_and_complete_trees() {

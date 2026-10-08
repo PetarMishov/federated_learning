@@ -25,6 +25,11 @@ After authentication and project authorization, use `AppState.git`:
   API-owned source commit and atomically creates its permanent snapshot reference.
 - `capture_snapshot(project_id, files)` writes uploaded bytes and a complete
   file tree as a commit in the existing project repository, without publishing a ref.
+- `capture_snapshot_changes(project_id, base_commit, files)` adds files or replaces regular
+  files in the base tree while preserving untouched entries and executable modes.
+- `capture_snapshot_patch(project_id, base_commit, files, operations)` applies
+  ordered move/delete operations to base objects before writing file contents.
+  Moves preserve raw objects and modes without downloading or following them.
 - `retain_snapshot(project_id, snapshot_id, commit_sha)` atomically retains an
   already captured commit without replacing any existing reference.
 - `list_snapshot_refs(project_id)` reads retained snapshot references.
@@ -42,7 +47,9 @@ reading host filesystem paths. The editor accepts regular UTF-8 text files up to
 8 MiB. This preview limit does not constrain snapshot storage. Oversized file
 responses include the file size and preview limit, displayed in the editor with
 a disabled download placeholder. Saving accepts a complete JSON file tree with
-text or base64 contents and requires current `edit_project` permission. It stages
+text or base64 contents, or a `base_snapshot_id` with only edited files, and requires
+current `edit_project` permission. The frontend keeps drafts and saves them against
+the selected snapshot, preserving unopened files. It stages
 raw bytes in private numbered temporary files, hashes blobs without filters, and
 builds a tree using a private Git index. Temporary files are removed when capture
 finishes or fails; Git commits and published refs are the permanent storage.
