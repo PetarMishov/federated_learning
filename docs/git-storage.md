@@ -23,6 +23,10 @@ After authentication and project authorization, use `AppState.git`:
 - `create_project_repository(project_id)` initializes or reuses a bare repository.
 - `publish_snapshot(project_id, snapshot_id, source, commit_sha)` imports an
   API-owned source commit and atomically creates its permanent snapshot reference.
+- `capture_snapshot(project_id, files)` writes uploaded bytes and a complete
+  file tree as a commit in the existing project repository, without publishing a ref.
+- `retain_snapshot(project_id, snapshot_id, commit_sha)` atomically retains an
+  already captured commit without replacing any existing reference.
 - `list_snapshot_refs(project_id)` reads retained snapshot references.
 
 References cannot be replaced through publication. Commits use full SHA-1 IDs.
@@ -31,15 +35,26 @@ A failed database transaction may leave an unlisted reference; reconcile that
 later without deleting published snapshots or commits used by deployments.
 Database metadata and Git storage must be backed up together.
 
-Snapshot listing, metadata, directory listing, and text file endpoints are implemented
+Snapshot saving, listing, metadata, directory listing, and text file endpoints are implemented
 with authentication and project authorization. Directory/file reads use the saved
 commit and resolve exact names within Git trees, without following symlinks or
 reading host filesystem paths. The editor accepts regular UTF-8 text files up to
 8 MiB. This preview limit does not constrain snapshot storage. Oversized file
 responses include the file size and preview limit, displayed in the editor with
-a disabled download placeholder. Other snapshot routes return `501 Not Implemented`. Upload parsing, commit
-construction, metadata publication, and archive download
-are future implementations. Downloads should generate archives from the saved
+a disabled download placeholder. Saving accepts a complete JSON file tree with
+text or base64 contents and requires current `edit_project` permission. It stages
+raw bytes in private numbered temporary files, hashes blobs without filters, and
+builds a tree using a private Git index. Temporary files are removed when capture
+finishes or fails; Git commits and published refs are the permanent storage.
+Metadata publication rechecks and locks editing rights, serializes saves per
+project, and retains the ref before committing. Uncertain commits are reconciled;
+failed/unresolved metadata commits can leave unlisted refs for reconciliation.
+The upload request is limited to 64 MiB including JSON/base64 overhead and 10000
+files, independently of the editor preview limit. See the
+[API request contract](../api/README.md#save-a-snapshot).
+
+The archive route returns `501 Not Implemented`. Provider imports and archive
+downloads are future implementations. Downloads should generate archives from the saved
 commit on demand. Storage is never served as public assets.
 
 ## Demo data

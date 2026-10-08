@@ -53,13 +53,18 @@ The population script builds deterministic Git commits from the tracked fixtures
 verifies existing refs rather than replacing them, and publishes refs before
 committing metadata. Download archives will be generated from saved commits.
 
-Future import/download handlers must reject traversal, exclude Git metadata and
-local datasets from uploaded file trees, and authorize access against current
-project permissions. Resolve files at the saved commit rather than a moving branch.
-The snapshot list, metadata, directory, and text file routes are implemented with
-authentication and project access checks. File reads resolve exact paths at the
-stored commit. Other snapshot routes return `501 Not Implemented`; their handlers are
-placeholders. The current Git helper imports only API-owned local repositories.
+Snapshot saving accepts complete uploaded file trees as JSON, with text or base64
+contents, and requires current project editing permission. It rejects traversal,
+Git metadata, duplicate paths, and file/directory conflicts. Clients must exclude
+local datasets. Commits are retained before metadata is committed; failed or
+unresolved database commits can leave unlisted refs for reconciliation. Saves
+preserve existing snapshots and do not create or replace deployments.
+
+The snapshot save, list, metadata, directory, and text file routes are implemented
+with authentication and project access checks. File reads resolve exact paths at
+the stored commit rather than a moving branch. The archive route remains a
+`501 Not Implemented` placeholder. Provider import handlers are future work; the
+Git helper's repository-import operation accepts only API-owned local repositories.
 
 ## Database operations
 

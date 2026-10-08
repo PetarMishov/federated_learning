@@ -1,6 +1,72 @@
 use super::types::{DBError, Snapshot, SnapshotList};
 use sqlx::{FromRow, PgPool, Row};
 
+pub async fn can_save_snapshot(
+    pool: &PgPool,
+    project_id: i32,
+    user_id: i32,
+) -> Result<bool, DBError> {
+    Ok(
+        sqlx::query_scalar("SELECT has_project_permission($1, $2, 'edit_project')")
+            .bind(user_id)
+            .bind(project_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub async fn create_snapshot<'a>(
+    executor: impl sqlx::PgExecutor<'a>,
+    project_id: i32,
+    user_id: i32,
+    git_commit_sha: &str,
+) -> Result<Option<Snapshot>, DBError> {
+    // Recheck editing rights at publication, retaining the authorization rows
+    // until commit so membership, ownership, and grants cannot change mid-save.
+    Ok(sqlx::query_as::<_, Snapshot>(
+        "WITH authorized_project AS (
+             SELECT p.id FROM projects p
+             JOIN organizations o ON o.id = p.org_id
+             JOIN user_organization caller ON caller.org_id = p.org_id AND caller.user_id = $2
+             WHERE p.id = $1 AND (o.owner_user_id = $2 OR EXISTS (
+                 SELECT 1 FROM role_project_permission g
+                 JOIN permissions perm ON perm.id = g.perm_id
+                 WHERE g.org_id = p.org_id AND g.project_id = p.id
+                   AND g.role_id = caller.role_id AND perm.name = 'edit_project'
+                 FOR SHARE OF g
+             ))
+             FOR SHARE OF p, o, caller
+         )
+         INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha, created_at)
+         SELECT id, $2, 'local', $3, clock_timestamp() FROM authorized_project
+         RETURNING id, project_id, created_by_user_id, source::text AS source,
+                   source_branch, source_commit_sha, git_commit_sha,
+                   (EXTRACT(EPOCH FROM created_at) * 1000)::double precision AS created_at",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .bind(git_commit_sha)
+    .fetch_optional(executor)
+    .await?)
+}
+
+pub async fn snapshot_was_saved<'a>(
+    executor: impl sqlx::PgExecutor<'a>,
+    project_id: i32,
+    snapshot_id: i32,
+    git_commit_sha: &str,
+) -> Result<bool, DBError> {
+    // Internal reconciliation only; HTTP reads must use get_snapshot instead.
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM snapshots WHERE project_id = $1 AND id = $2 AND git_commit_sha = $3)",
+    )
+    .bind(project_id)
+    .bind(snapshot_id)
+    .bind(git_commit_sha)
+    .fetch_one(executor)
+    .await?)
+}
+
 pub async fn get_snapshots(
     pool: &PgPool,
     project_id: i32,

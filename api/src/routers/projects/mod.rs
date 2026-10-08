@@ -1,9 +1,10 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
-use crate::state::AppState;
+use crate::{snapshots::types::MAX_SNAPSHOT_REQUEST_BYTES, state::AppState};
 
 mod create_project;
 mod get_project_deployments;
@@ -19,7 +20,9 @@ pub fn projects_router() -> Router<AppState> {
     Router::new()
         .route(
             "/projects/{proj_id}/snapshots",
-            post(save_snapshot::save_snapshot_request).get(get_snapshots::get_snapshots_request),
+            post(save_snapshot::save_snapshot_request)
+                .get(get_snapshots::get_snapshots_request)
+                .layer(DefaultBodyLimit::max(MAX_SNAPSHOT_REQUEST_BYTES)),
         )
         .route(
             "/projects/{proj_id}/snapshots/{snapshot_id}",
@@ -62,7 +65,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn snapshot_routes_return_not_implemented() {
+    async fn snapshot_archive_route_returns_not_implemented() {
         let secret = b"snapshot-test-secret-at-least-32-bytes";
         let state = AppState {
             pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
@@ -74,7 +77,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        for (method, suffix) in [("POST", ""), ("GET", "/7/archive")] {
+        for (method, suffix) in [("GET", "/7/archive")] {
             let mut connection = TcpStream::connect(address).await.unwrap();
             let request = format!(
                 "{method} /projects/42/snapshots{suffix} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

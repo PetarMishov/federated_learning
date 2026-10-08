@@ -22,3 +22,23 @@ pub struct SnapshotPreviewTooLarge {
     pub size_bytes: usize,
     pub max_preview_bytes: usize,
 }
+
+/// HTTP request limit, independent of the editor's per-file preview limit.
+pub const MAX_SNAPSHOT_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_SNAPSHOT_FILES: usize = 10_000;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveSnapshotRequest {
+    pub files: Vec<SnapshotUploadFile>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotUploadFile {
+    pub path: String,
+    pub content: Option<String>,
+    pub content_base64: Option<String>,
+    #[serde(default)]
+    pub executable: bool,
+}

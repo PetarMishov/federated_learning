@@ -130,6 +130,23 @@ async fn snapshot_metadata_route_rejects_missing_and_forged_credentials() {
 }
 
 #[tokio::test]
+async fn snapshot_save_route_rejects_missing_and_forged_credentials() {
+    let (address, server) =
+        serve(PgPool::connect_lazy("postgres://localhost/unused").unwrap()).await;
+    for token in [None, Some("forged-token")] {
+        for body in [json!({"files": []}), Value::Null] {
+            assert_eq!(
+                request(address, "POST", "/projects/42/snapshots", body, token)
+                    .await
+                    .0,
+                401
+            );
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL and permission to create a temporary schema"]
 async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
     let url = std::env::var("TEST_DATABASE_URL").unwrap();
@@ -170,6 +187,7 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
         check_creation(address, &check_pool, &git).await;
         check_project_members(address, &check_pool).await;
         check_snapshots(address, &check_pool, &git).await;
+        check_save_snapshots(address, &check_pool, &git).await;
     })
     .await;
     server.abort();
@@ -628,6 +646,485 @@ async fn check_creation(address: SocketAddr, pool: &PgPool, git: &crate::git::Gi
             401
         );
     }
+}
+
+async fn check_save_snapshots(address: SocketAddr, pool: &PgPool, git: &crate::git::GitClient) {
+    let mut users = Vec::new();
+    for username in ["save-owner", "save-editor", "save-reader", "save-outsider"] {
+        users.push(
+            sqlx::query_scalar::<_, i32>(
+                "INSERT INTO users (username, password_hash) VALUES ($1, 'unused') RETURNING id",
+            )
+            .bind(username)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        );
+    }
+    let owner = users[0];
+    let editor = users[1];
+    let organization = crate::db::organizations::create_organization(pool, owner, "Save fixture")
+        .await
+        .unwrap();
+    let mut roles = Vec::new();
+    for (user, name) in [(editor, "Snapshot editor"), (users[2], "Snapshot reader")] {
+        let role = sqlx::query_scalar::<_, i32>(
+            "INSERT INTO roles (org_id, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(organization.id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_organization (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+            .bind(organization.id)
+            .bind(user)
+            .bind(role)
+            .execute(pool)
+            .await
+            .unwrap();
+        roles.push(role);
+    }
+    let (status, body) = request(
+        address,
+        "POST",
+        &format!("/organizations/{}/projects", organization.id),
+        json!({"name":"Upload target"}),
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let project = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_i64()
+        .unwrap() as i32;
+    for (role, permission) in [
+        (roles[0], "edit_project"),
+        (roles[1], "participate_in_deployment"),
+    ] {
+        sqlx::query(
+            "INSERT INTO role_project_permission (org_id, role_id, project_id, perm_id)
+            SELECT $1, $2, $3, id FROM permissions WHERE name = $4",
+        )
+        .bind(organization.id)
+        .bind(role)
+        .bind(project)
+        .bind(permission)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let path = format!("/projects/{project}/snapshots");
+    let upload = json!({"files": [
+        {"path":"train.py", "content":"print('uploaded')\r\n"},
+        {"path":"src/space name.py", "content":"nested\n"},
+        {"path":"binary.bin", "content_base64":"AP8B"},
+        {"path":"run.sh", "content":"#!/bin/sh\necho ok\n", "executable":true}
+    ]});
+    for user in [users[2], users[3]] {
+        assert_eq!(
+            request(address, "POST", &path, upload.clone(), Some(&token(user)))
+                .await
+                .0,
+            404
+        );
+    }
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            "/projects/2147483647/snapshots",
+            upload.clone(),
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        404
+    );
+    assert!(git.list_snapshot_refs(project).await.unwrap().is_empty());
+    let (status, body) = request(address, "POST", &path, upload.clone(), Some(&token(owner))).await;
+    assert_eq!(status, 201, "{body}");
+    let first = serde_json::from_str::<Value>(&body).unwrap();
+    let first_id = first["id"].as_i64().unwrap();
+    assert_eq!(first["project_id"], project);
+    assert_eq!(first["created_by_user_id"], owner);
+    assert_eq!(first["source"], "local");
+    assert!(first["source_branch"].is_null());
+    assert_eq!(first["git_commit_sha"].as_str().unwrap().len(), 40);
+    let refs = git.list_snapshot_refs(project).await.unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].name, format!("refs/snapshots/{first_id}"));
+    assert_eq!(refs[0].commit_sha, first["git_commit_sha"]);
+    let (_, metadata) = request(
+        address,
+        "GET",
+        &format!("{path}/{first_id}"),
+        Value::Null,
+        Some(&token(users[2])),
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&metadata).unwrap(), first);
+    let (_, file) = request(
+        address,
+        "GET",
+        &format!("{path}/{first_id}/file?path=train.py"),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&file).unwrap()["content"],
+        "print('uploaded')\r\n"
+    );
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &format!("{path}/{first_id}/file?path=binary.bin"),
+            Value::Null,
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        415
+    );
+
+    // Each upload replaces the complete file tree for the new version only.
+    let (status, body) = request(
+        address,
+        "POST",
+        &path,
+        json!({"files":[{"path":"new.py", "content":"new"}]}),
+        Some(&token(editor)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let second = serde_json::from_str::<Value>(&body).unwrap();
+    assert_eq!(second["created_by_user_id"], editor);
+    let second_id = second["id"].as_i64().unwrap();
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &format!("{path}/{second_id}/file?path=train.py"),
+            Value::Null,
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &format!("{path}/{first_id}/file?path=train.py"),
+            Value::Null,
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        200
+    );
+
+    let before = git.list_snapshot_refs(project).await.unwrap();
+    for (payload, expected) in [
+        (json!({"files":[{"path":"../secret", "content":"x"}]}), 400),
+        (
+            json!({"files":[{"path":".git/config", "content":"x"}]}),
+            400,
+        ),
+        (
+            json!({"files":[{"path":"a", "content":"x"},{"path":"a", "content":"y"}]}),
+            400,
+        ),
+        (
+            json!({"files":[{"path":"a", "content":"x"},{"path":"a/file", "content":"y"}]}),
+            400,
+        ),
+        (json!({"files":[{"path":"a", "content_base64":"%%%"}]}), 400),
+        (
+            json!({"files":[{"path":"a", "content":"x", "content_base64":"eA=="}]}),
+            400,
+        ),
+        (json!({"files":[{"path":"a"}]}), 400),
+        (json!({"files":[], "created_by_user_id":users[3]}), 422),
+        (json!({"files":"invalid"}), 422),
+        (
+            json!({"files":vec![json!({"path":"a", "content":""}); crate::snapshots::types::MAX_SNAPSHOT_FILES + 1]}),
+            413,
+        ),
+    ] {
+        assert_eq!(
+            request(address, "POST", &path, payload, Some(&token(owner)))
+                .await
+                .0,
+            expected
+        );
+        assert_eq!(git.list_snapshot_refs(project).await.unwrap(), before);
+    }
+    // An editor cannot upload to another project or publish after losing editing rights.
+    let other =
+        crate::db::projects::create_project(pool, organization.id, owner, "Unshared project")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &format!("/projects/{}/snapshots", other.id),
+            upload.clone(),
+            Some(&token(editor))
+        )
+        .await
+        .0,
+        404
+    );
+    assert!(
+        crate::db::snapshots::can_save_snapshot(pool, project, editor)
+            .await
+            .unwrap()
+    );
+    sqlx::query("DELETE FROM role_project_permission WHERE role_id = $1 AND project_id = $2")
+        .bind(roles[0])
+        .bind(project)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        crate::db::snapshots::create_snapshot(
+            pool,
+            project,
+            editor,
+            first["git_commit_sha"].as_str().unwrap()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        request(address, "POST", &path, upload.clone(), Some(&token(editor)))
+            .await
+            .0,
+        404
+    );
+    let revoked = token(owner);
+    let claims = jsonwebtoken::decode::<Claims>(
+        &revoked,
+        &DecodingKey::from_secret(SECRET),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    sqlx::query(
+        "INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, to_timestamp($2::double precision))",
+    )
+    .bind(claims.jti)
+    .bind(claims.exp as f64)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        request(address, "POST", &path, upload.clone(), Some(&revoked))
+            .await
+            .0,
+        401
+    );
+    assert_eq!(git.list_snapshot_refs(project).await.unwrap(), before);
+
+    // Files larger than the preview limit are still saved, including requests over Axum's default 2 MiB.
+    let large_size = crate::git::MAX_PREVIEW_BYTES + 1;
+    let (status, body) = request(
+        address,
+        "POST",
+        &path,
+        json!({"files":[{"path":"large.py", "content":"x".repeat(large_size)}]}),
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let large = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let (status, body) = request(
+        address,
+        "GET",
+        &format!("{path}/{large}/file?path=large.py"),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 413);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["size_bytes"],
+        large_size
+    );
+
+    // Git failures roll back metadata and never overwrite a retained reference.
+    let collision = sqlx::query_scalar::<_, i64>("SELECT last_value + 1 FROM snapshots_id_seq")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    git.retain_snapshot(
+        project,
+        &collision.to_string(),
+        first["git_commit_sha"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM snapshots WHERE project_id = $1")
+            .bind(project)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let refs = git.list_snapshot_refs(project).await.unwrap();
+    assert_eq!(
+        request(address, "POST", &path, upload.clone(), Some(&token(owner)))
+            .await
+            .0,
+        500
+    );
+    assert_eq!(git.list_snapshot_refs(project).await.unwrap(), refs);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM snapshots WHERE project_id = $1")
+            .bind(project)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        count
+    );
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &format!("/projects/{}/snapshots", other.id),
+            upload.clone(),
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        500
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM snapshots WHERE project_id = $1")
+            .bind(other.id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
+
+    // A deferred database failure occurs after Git retention; do not report success
+    // or remove existing snapshots. The unlisted reference remains for reconciliation.
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_snapshot_save() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'Test commit failure'; END; $$;
+        CREATE CONSTRAINT TRIGGER reject_snapshot_save AFTER INSERT ON snapshots
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_snapshot_save();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let (status, body) = request(address, "POST", &path, upload.clone(), Some(&token(owner))).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(!body.contains("Test commit failure"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM snapshots WHERE project_id = $1")
+            .bind(project)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        count
+    );
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &format!("{path}/{first_id}/file?path=train.py"),
+            Value::Null,
+            Some(&token(owner))
+        )
+        .await
+        .0,
+        200
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER reject_snapshot_save ON snapshots; DROP FUNCTION reject_snapshot_save();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let make_upload = |number| json!({"files":[{"path":"concurrent.py", "content":format!("version {number}")} ]});
+    let owner_token = token(owner);
+    let results = tokio::join!(
+        request(address, "POST", &path, make_upload(1), Some(&owner_token)),
+        request(address, "POST", &path, make_upload(2), Some(&owner_token)),
+        request(address, "POST", &path, make_upload(3), Some(&owner_token)),
+        request(address, "POST", &path, make_upload(4), Some(&owner_token)),
+        request(address, "POST", &path, make_upload(5), Some(&owner_token)),
+    );
+    let mut saved_ids = std::collections::HashSet::new();
+    let refs = git.list_snapshot_refs(project).await.unwrap();
+    for (status, body) in [results.0, results.1, results.2, results.3, results.4] {
+        assert_eq!(status, 201, "{body}");
+        let saved = serde_json::from_str::<Value>(&body).unwrap();
+        let id = saved["id"].as_i64().unwrap();
+        assert!(saved_ids.insert(id));
+        assert!(
+            refs.iter()
+                .any(|reference| reference.name == format!("refs/snapshots/{id}")
+                    && reference.commit_sha == saved["git_commit_sha"].as_str().unwrap())
+        );
+    }
+    let (_, body) = request(address, "GET", &path, Value::Null, Some(&token(owner))).await;
+    let listed = serde_json::from_str::<Value>(&body).unwrap();
+    assert_eq!(
+        listed["snapshots"][0]["id"].as_i64().unwrap(),
+        *saved_ids.iter().max().unwrap()
+    );
+    let (status, body) = request(
+        address,
+        "POST",
+        &path,
+        json!({"files":[]}),
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let empty_id = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let (_, body) = request(
+        address,
+        "GET",
+        &format!("{path}/{empty_id}/tree"),
+        Value::Null,
+        Some(&token(owner)),
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["entries"],
+        json!([])
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deployment_runs WHERE project_id = $1")
+            .bind(project)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        std::fs::read_dir(git.repository_root().parent().unwrap())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".capture-"))
+    );
 }
 
 async fn check_snapshots(address: SocketAddr, pool: &PgPool, git: &crate::git::GitClient) {

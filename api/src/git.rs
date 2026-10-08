@@ -1,12 +1,13 @@
 //! Private local Git storage for authenticated API handlers.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
     time::Duration,
 };
-use tokio::{process::Command, sync::Mutex};
+use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 
 /// Errors from repository validation, filesystem access, and Git execution.
 #[derive(Debug)]
@@ -98,6 +99,22 @@ pub struct GitTree {
 pub struct GitFile {
     pub path: String,
     pub content: String,
+}
+
+pub struct GitSnapshotFile {
+    pub path: String,
+    pub content: Vec<u8>,
+    pub executable: bool,
+}
+
+struct CaptureDirectory(PathBuf);
+
+impl Drop for CaptureDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("Could not clean snapshot capture temporary files: {error}");
+        }
+    }
 }
 
 struct TreeObject {
@@ -428,18 +445,7 @@ impl GitClient {
         source: &Path,
         commit_sha: &str,
     ) -> Result<(), GitError> {
-        let valid_id = !snapshot_id.is_empty()
-            && snapshot_id
-                .bytes()
-                .next()
-                .is_some_and(|b| b.is_ascii_alphanumeric())
-            && snapshot_id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-        if !valid_id || commit_sha.len() != 40 || !commit_sha.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Err(GitError::InvalidInput("Invalid snapshot ID or commit SHA"));
-        }
+        validate_snapshot_reference(snapshot_id, commit_sha)?;
         reject_symlinks(source)?;
         let source = source.canonicalize()?;
         let repository = self.repository_path(project_id)?;
@@ -451,6 +457,19 @@ impl GitClient {
             .arg(source)
             .arg(commit_sha);
         run(fetch).await?;
+        self.retain_snapshot(project_id, snapshot_id, commit_sha)
+            .await
+    }
+
+    /// Retain a commit already captured in this project's repository.
+    pub async fn retain_snapshot(
+        &self,
+        project_id: i32,
+        snapshot_id: &str,
+        commit_sha: &str,
+    ) -> Result<(), GitError> {
+        validate_snapshot_reference(snapshot_id, commit_sha)?;
+        let repository = self.repository_path(project_id)?;
         let mut check = self.command();
         check
             .arg("--git-dir")
@@ -470,6 +489,128 @@ impl GitClient {
         ]);
         run(publish).await?;
         Ok(())
+    }
+
+    /// Capture raw uploaded bytes without checking out paths or invoking filters.
+    /// Callers must authorize project editing before writing Git objects.
+    pub async fn capture_snapshot(
+        &self,
+        project_id: i32,
+        files: Vec<GitSnapshotFile>,
+    ) -> Result<String, GitError> {
+        validate_upload_paths(&files)?;
+        let repository = self.repository_path(project_id)?;
+        if self
+            .object_command(project_id, &["rev-parse", "--is-bare-repository"])
+            .await?
+            != b"true\n"
+        {
+            return Err(GitError::InvalidInput(
+                "Project storage must be a bare Git repository",
+            ));
+        }
+        let lock = self
+            .repository_locks
+            .lock()
+            .await
+            .entry(project_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+        let directory = self
+            .repository_root
+            .parent()
+            .ok_or(GitError::InvalidData("Invalid Git storage root"))?
+            .join(format!(".capture-{}", uuid::Uuid::new_v4()));
+        let (capture, names) = tokio::task::spawn_blocking(move || {
+            reject_symlinks(&directory)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+            }
+            #[cfg(not(unix))]
+            std::fs::create_dir(&directory)?;
+            let capture = CaptureDirectory(directory);
+            let mut names = Vec::with_capacity(files.len());
+            for (index, file) in files.into_iter().enumerate() {
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut output = options.open(capture.0.join(index.to_string()))?;
+                std::io::Write::write_all(&mut output, &file.content)?;
+                names.push((file.path, file.executable));
+            }
+            Ok::<_, GitError>((capture, names))
+        })
+        .await
+        .map_err(|_| GitError::InvalidData("Snapshot capture task failed"))??;
+        let mut index_info = Vec::new();
+        // Numbered private temporary files avoid interpreting uploaded names as
+        // host paths. --no-filters preserves even .gitattributes-controlled bytes.
+        for (batch, chunk) in names.chunks(128).enumerate() {
+            let mut hash = self.command();
+            hash.arg("--git-dir").arg(&repository).args([
+                "hash-object",
+                "-w",
+                "--no-filters",
+                "--",
+            ]);
+            for index in 0..chunk.len() {
+                hash.arg(capture.0.join((batch * 128 + index).to_string()));
+            }
+            let hashes = run(hash).await?;
+            let hashes = std::str::from_utf8(&hashes)
+                .map_err(|_| GitError::InvalidData("Invalid uploaded blob hashes"))?
+                .lines()
+                .collect::<Vec<_>>();
+            if hashes.len() != chunk.len() {
+                return Err(GitError::InvalidData("Missing uploaded blob hashes"));
+            }
+            for ((path, executable), sha) in chunk.iter().zip(hashes) {
+                validate_object_sha(sha)?;
+                index_info.extend_from_slice(if *executable { b"100755 " } else { b"100644 " });
+                index_info.extend_from_slice(sha.as_bytes());
+                index_info.push(b'\t');
+                index_info.extend_from_slice(path.as_bytes());
+                index_info.push(0);
+            }
+        }
+        let index = capture.0.join("index");
+        let mut empty = self.command();
+        empty
+            .arg("--git-dir")
+            .arg(&repository)
+            .args(["read-tree", "--empty"])
+            .env("GIT_INDEX_FILE", &index);
+        run(empty).await?;
+        let mut update = self.command();
+        update
+            .arg("--git-dir")
+            .arg(&repository)
+            .args(["update-index", "-z", "--index-info"])
+            .env("GIT_INDEX_FILE", &index);
+        run_with_input(update, &index_info).await?;
+        let mut tree = self.command();
+        tree.arg("--git-dir")
+            .arg(&repository)
+            .arg("write-tree")
+            .env("GIT_INDEX_FILE", &index);
+        let tree = parse_object_sha(run(tree).await?)?;
+        let mut commit = self.command();
+        commit
+            .arg("--git-dir")
+            .arg(repository)
+            .args(["commit-tree", &tree])
+            .env("GIT_AUTHOR_NAME", "Snapshot storage")
+            .env("GIT_AUTHOR_EMAIL", "snapshots@localhost")
+            .env("GIT_COMMITTER_NAME", "Snapshot storage")
+            .env("GIT_COMMITTER_EMAIL", "snapshots@localhost");
+        parse_object_sha(run_with_input(commit, b"Saved snapshot\n").await?)
     }
 
     fn command(&self) -> Command {
@@ -505,6 +646,69 @@ impl GitClient {
 fn validate_project_id(project_id: i32) -> Result<(), GitError> {
     if project_id <= 0 {
         return Err(GitError::InvalidInput("Project ID must be positive"));
+    }
+    Ok(())
+}
+
+fn validate_object_sha(sha: &str) -> Result<(), GitError> {
+    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(GitError::InvalidData("Invalid Git object hash"));
+    }
+    Ok(())
+}
+
+fn parse_object_sha(output: Vec<u8>) -> Result<String, GitError> {
+    let sha = std::str::from_utf8(&output)
+        .map_err(|_| GitError::InvalidData("Invalid Git object hash"))?
+        .trim();
+    validate_object_sha(sha)?;
+    Ok(sha.to_owned())
+}
+
+fn validate_snapshot_reference(snapshot_id: &str, commit_sha: &str) -> Result<(), GitError> {
+    let valid_id = snapshot_id
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && snapshot_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+    if !valid_id || validate_object_sha(commit_sha).is_err() {
+        return Err(GitError::InvalidInput("Invalid snapshot ID or commit SHA"));
+    }
+    Ok(())
+}
+
+fn validate_upload_paths(files: &[GitSnapshotFile]) -> Result<(), GitError> {
+    let mut paths = HashSet::with_capacity(files.len());
+    for file in files {
+        validate_snapshot_path(&file.path, false)?;
+        if file.path.len() > 4096
+            || file.path.chars().any(char::is_control)
+            || file.path.split('/').any(|part| {
+                part.len() > 255
+                    || part.contains(':')
+                    || part
+                        .trim_end_matches([' ', '.'])
+                        .eq_ignore_ascii_case(".git")
+            })
+        {
+            return Err(GitError::InvalidInput(
+                "File paths must exclude Git metadata, control characters, and oversized names.",
+            ));
+        }
+        if !paths.insert(file.path.as_str()) {
+            return Err(GitError::InvalidInput("File paths must be unique."));
+        }
+    }
+    for file in files {
+        for (index, _) in file.path.match_indices('/') {
+            if paths.contains(&file.path[..index]) {
+                return Err(GitError::InvalidInput(
+                    "A path cannot be both a file and a directory.",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -556,9 +760,206 @@ async fn run(mut command: Command) -> Result<Vec<u8>, GitError> {
     Ok(output.stdout)
 }
 
+async fn run_with_input(mut command: Command, input: &[u8]) -> Result<Vec<u8>, GitError> {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut child = command.spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("Git stdin unavailable"))?;
+        let write = async {
+            stdin.write_all(input).await?;
+            drop(stdin);
+            Ok::<_, io::Error>(())
+        };
+        let (_, output) = tokio::try_join!(write, child.wait_with_output())?;
+        Ok::<_, io::Error>(output)
+    })
+    .await
+    .map_err(|_| GitError::Timeout)??;
+    if !output.status.success() {
+        return Err(GitError::CommandFailed {
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(output.stdout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn uploaded_snapshots_preserve_raw_bytes_modes_and_complete_trees() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let file = |path: &str, content: &[u8], executable| GitSnapshotFile {
+            path: path.into(),
+            content: content.to_vec(),
+            executable,
+        };
+        let first = client
+            .capture_snapshot(
+                42,
+                vec![
+                    file(
+                        ".gitattributes",
+                        b"*.py text eol=lf\n*.bin filter=anything\n",
+                        false,
+                    ),
+                    file(".gitignore", b"ignored.py\n", false),
+                    file("ignored.py", b"print('kept')\r\n", false),
+                    file("src/space name.py", b"print('nested')\n", false),
+                    file("src/run.sh", b"#!/bin/sh\necho ok\n", true),
+                    file("binary.bin", &[0, 255, 1], false),
+                    file("empty.txt", b"", false),
+                ],
+            )
+            .await
+            .unwrap();
+        // Capture does not publish until the database has allocated a snapshot ID.
+        assert!(client.list_snapshot_refs(42).await.unwrap().is_empty());
+        client.retain_snapshot(42, "1", &first).await.unwrap();
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "ignored.py")
+                .await
+                .unwrap()
+                .content,
+            "print('kept')\r\n"
+        );
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "src/space name.py")
+                .await
+                .unwrap()
+                .content,
+            "print('nested')\n"
+        );
+        assert_eq!(
+            client
+                .object_command(42, &["show", &format!("{first}:binary.bin")])
+                .await
+                .unwrap(),
+            [0, 255, 1]
+        );
+        let mode = client
+            .object_command(42, &["ls-tree", &first, "src/run.sh"])
+            .await
+            .unwrap();
+        assert!(mode.starts_with(b"100755 blob "));
+        let second = client
+            .capture_snapshot(42, vec![file("new.py", b"new version\n", false)])
+            .await
+            .unwrap();
+        client.retain_snapshot(42, "2", &second).await.unwrap();
+        assert_eq!(
+            client
+                .snapshot_tree(42, &second, "")
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        assert!(matches!(
+            client.snapshot_file(42, &second, "ignored.py").await,
+            Err(GitError::NotFound)
+        ));
+        assert!(client.retain_snapshot(42, "1", &second).await.is_err());
+        assert_eq!(
+            client
+                .snapshot_file(42, &first, "ignored.py")
+                .await
+                .unwrap()
+                .content,
+            "print('kept')\r\n"
+        );
+        let empty = client.capture_snapshot(42, vec![]).await.unwrap();
+        client.retain_snapshot(42, "3", &empty).await.unwrap();
+        assert!(
+            client
+                .snapshot_tree(42, &empty, "")
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        assert!(
+            std::fs::read_dir(fixture.0.join("storage/git"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".capture-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn uploaded_snapshots_reject_invalid_paths_before_writing_objects() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let files = |paths: &[&str]| {
+            paths
+                .iter()
+                .map(|path| GitSnapshotFile {
+                    path: (*path).into(),
+                    content: vec![],
+                    executable: false,
+                })
+                .collect()
+        };
+        for path in [
+            "",
+            "/etc/passwd",
+            "../file",
+            "a/../file",
+            "a//file",
+            "a\\file",
+            "a\0file",
+            ".git/config",
+            "a/.Git/config",
+            ".git./config",
+            "C:/file",
+            "a\nfile",
+        ] {
+            assert!(
+                matches!(
+                    client.capture_snapshot(42, files(&[path])).await,
+                    Err(GitError::InvalidInput(_))
+                ),
+                "{path:?}"
+            );
+        }
+        for paths in [
+            vec!["a.py", "a.py"],
+            vec!["a", "a.b", "a/file"],
+            vec!["a/file", "a"],
+        ] {
+            assert!(matches!(
+                client.capture_snapshot(42, files(&paths)).await,
+                Err(GitError::InvalidInput(_))
+            ));
+        }
+        assert!(client.list_snapshot_refs(42).await.unwrap().is_empty());
+        assert!(
+            std::fs::read_dir(fixture.0.join("storage/git"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".capture-"))
+        );
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {

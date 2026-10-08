@@ -168,8 +168,7 @@ Unsupported entries or binary files return `415`; oversized files return `413`
 with JSON containing `error: "preview_too_large"`, `size_bytes`, and
 `max_preview_bytes`. The editor shows the file size and preview limit, with a
 disabled **Download file** placeholder until file downloads are implemented.
-Storage failures return
-`500` without exposing Git stderr or host paths.
+Storage failures return `500` without exposing Git stderr or host paths.
 
 The Files pane loads the selected snapshot's root directory. Click folders to
 browse, use **Up** to return to a parent directory, and click a file to show its
@@ -177,15 +176,64 @@ contents in the read-only editor. Contents are rendered as escaped text. Loading
 and retry states are independent for folders and files; changing snapshots or
 projects cancels outstanding reads and clears previous contents.
 
+## Save a snapshot
+
+`POST /projects/{proj_id}/snapshots` requires a Bearer token and current
+`edit_project` permission, including the organization owner. Send the complete
+file tree as JSON:
+
+```json
+{
+  "files": [
+    {"path": "train.py", "content": "print('saved')\n"},
+    {"path": "src/run.sh", "content": "#!/bin/sh\necho ready\n", "executable": true},
+    {"path": "assets/example.bin", "content_base64": "AP8B"}
+  ]
+}
+```
+
+Each file must specify exactly one of `content` (UTF-8 text) or
+`content_base64` (standard padded base64 for arbitrary bytes). `executable`
+defaults to `false`. Omitted files are absent from the new snapshot; earlier
+snapshots remain intact. An empty `files` array saves an empty Git tree.
+Uploads are recorded as `source: "local"`; provider imports and source provenance
+are separate future work. Include project code only, excluding local datasets.
+
+Paths must be unique and relative, with no empty, `.` or `..` components,
+backslashes, colons, control characters, or `.git` components (case-insensitive,
+including trailing dots/spaces). A path cannot be both a file and a directory.
+Paths are limited to 4096 UTF-8 bytes and components to 255 bytes. Unknown JSON
+fields are rejected. Files are regular blobs; symlinks and submodules are not
+created by uploads. Git filters, line-ending conversion, and ignore rules do not
+alter or omit uploaded bytes.
+
+The JSON request body is limited to 64 MiB, including JSON/base64 overhead, and
+at most 10000 files. These upload limits are independent of the 8 MiB text
+preview limit: larger files can be saved but cannot be previewed in full.
+
+Successful saves return `201 Created` with the same snapshot metadata fields as
+`GET /projects/{proj_id}/snapshots/{snapshot_id}`. The API captures the commit,
+rechecks/locks editing authorization in a transaction, inserts metadata, and
+creates `refs/snapshots/<snapshot-id>` before committing. Publication is serialized
+per project, including across API processes. Uncertain database commit outcomes
+are reconciled before returning success; unresolved/failed commits retain Git
+data for later reconciliation without removing earlier snapshots.
+
+Missing/invalid/revoked credentials return `401`; unavailable projects or missing
+editing permission return `404`; invalid file paths/content return `400`;
+invalid JSON structure/unknown fields return `422` (malformed JSON returns `400`);
+upload limits return `413`; storage/database failures return a generic `500`.
+Saving a snapshot does not create or replace deployments. The frontend upload
+controls and **Save as new snapshot** button remain placeholders.
+
 ## Snapshot placeholders
 
 These routes are registered and return `501 Not Implemented`. Each handler has its
 own `.rs` file in `src/routers/projects/`. Authentication, request/response types,
-permission checks, uploads, and archive generation remain TODOs.
+permission checks and archive generation remain TODOs for archive downloads.
 
 | Endpoint | Planned purpose |
 | --- | --- |
-| `POST /projects/{proj_id}/snapshots` | Save a complete file tree as an immutable Git snapshot |
 | `GET /projects/{proj_id}/snapshots/{snapshot_id}/archive` | Generate a download of the complete saved file tree |
 
 The database stores `git_commit_sha`; files are retained in the project's repository
