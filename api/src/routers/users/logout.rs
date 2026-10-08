@@ -43,6 +43,7 @@ mod tests {
             pool,
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         let login = || VerifyLoginRequest {
             username: "demo".into(),
@@ -78,6 +79,7 @@ mod tests {
             pool: state.pool.clone(),
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         assert_eq!(
             verify_user_credentials(headers(&first), &restarted)

@@ -6,6 +6,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub encoding_key: EncodingKey,
     pub decoding_key: DecodingKey,
+    pub git: crate::git::GitClient,
 }
 
 pub fn signing_key(secret: &str) -> Result<EncodingKey, std::io::Error> {

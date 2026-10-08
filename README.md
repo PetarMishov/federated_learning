@@ -16,3 +16,7 @@ Current tasks:
         figuring out how we will verify inputs from different users
 
 Database setup, population, and test commands are documented in [db/README.md](db/README.md).
+
+Set up the private Git SSH server before starting the API; see
+[git-server/README.md](git-server/README.md). Its SSH identity and Git client are
+available through `AppState.git`.

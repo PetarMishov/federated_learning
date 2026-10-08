@@ -1,0 +1,21 @@
+#!/usr/bin/python3
+"""Published snapshot refs are append-only and must point to commits."""
+import re
+import subprocess
+import sys
+
+for line in sys.stdin:
+    old, new, ref = line.split()
+    if not ref.startswith("refs/snapshots/"):
+        continue
+    if not re.fullmatch(r"refs/snapshots/[a-zA-Z0-9][a-zA-Z0-9_-]*", ref):
+        print("Invalid snapshot identifier", file=sys.stderr)
+        raise SystemExit(1)
+    if old != "0" * 40 or new == "0" * 40:
+        print("Published snapshot references cannot be changed or deleted", file=sys.stderr)
+        raise SystemExit(1)
+    result = subprocess.run(["/usr/bin/git", "cat-file", "-t", new],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode or result.stdout.strip() != b"commit":
+        print("Snapshots must reference commits", file=sys.stderr)
+        raise SystemExit(1)

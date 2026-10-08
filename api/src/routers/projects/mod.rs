@@ -42,6 +42,7 @@ mod tests {
             pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         let app = Router::new().merge(projects_router()).with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -24,6 +24,7 @@ async fn serve(pool: PgPool) -> (SocketAddr, tokio::task::JoinHandle<()>) {
             pool,
             encoding_key: EncodingKey::from_secret(SECRET),
             decoding_key: DecodingKey::from_secret(SECRET),
+            git: crate::git::GitClient::test_config(),
         });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -509,6 +510,7 @@ async fn check_creation(address: SocketAddr, pool: &PgPool) {
     sqlx::query("INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, CURRENT_TIMESTAMP + interval '1 hour')")
         .bind(crate::db::users::verify_user_token(&owner_token, &AppState {
             pool: pool.clone(), encoding_key: EncodingKey::from_secret(SECRET), decoding_key: DecodingKey::from_secret(SECRET),
+            git: crate::git::GitClient::test_config(),
         }).unwrap().jti).execute(pool).await.unwrap();
     for path in ["/organizations", project_path.as_str()] {
         assert_eq!(

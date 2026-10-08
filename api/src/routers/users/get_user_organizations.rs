@@ -46,6 +46,7 @@ mod tests {
             pool,
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         for (username, expected) in [
             (
@@ -100,6 +101,7 @@ mod tests {
             pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         let sign = |sub: &str, exp, key: &EncodingKey| {
             encode(

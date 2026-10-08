@@ -1,5 +1,9 @@
 # API endpoints
 
+API startup loads the private Git SSH identity into `AppState.git`. Run the
+[Git server setup](../git-server/README.md) first; existing HTTP endpoints retain
+their current authentication and behavior.
+
 ## Project members
 
 `GET /projects/{proj_id}/members` requires a valid bearer token and returns:

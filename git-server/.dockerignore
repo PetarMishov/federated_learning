@@ -1,0 +1,8 @@
+*
+!Dockerfile
+!sshd_config
+!scripts/
+!scripts/git_command.py
+!scripts/start_sshd.sh
+!hooks/
+!hooks/pre-receive

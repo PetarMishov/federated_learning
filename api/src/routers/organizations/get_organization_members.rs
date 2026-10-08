@@ -34,6 +34,7 @@ mod tests {
             pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            git: crate::git::GitClient::test_config(),
         };
         let result =
             get_organization_members_request(State(state), Path(1), HeaderMap::new()).await;
