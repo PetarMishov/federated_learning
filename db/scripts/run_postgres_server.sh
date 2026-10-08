@@ -33,7 +33,8 @@ else
   docker run --name federated-learning-db \
     --env-file "$postgres_env_file" \
     -p "127.0.0.1:$postgres_port:5432" \
-    -v federated-learning-pgdata:/var/lib/postgresql/data \
+    -e PGDATA=/data/postgres \
+    -v federated-learning-pgdata:/data/postgres \
     -d postgres:17 >/dev/null
 fi
 

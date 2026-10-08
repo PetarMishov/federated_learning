@@ -1,4 +1,2 @@
 .env
-var/snapshots/
 storage/
-git-server/scripts/__pycache__/

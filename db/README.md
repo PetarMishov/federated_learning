@@ -61,7 +61,7 @@ place. Run setup and population again to recreate the database and demo data:
 ./db/scripts/populate_db.sh
 ```
 
-Snapshots default to `var/snapshots/`, outside frontend assets and Git tracking.
+Snapshots default to `storage/snapshots/`, outside frontend assets and Git tracking.
 Set an absolute `SNAPSHOT_STORAGE_DIR` in `.env` to override that location. Use the
 population script rather than executing `populate.sql` directly: it writes the
 snapshot archives first and supplies their real hashes to SQL.

@@ -17,6 +17,5 @@ Current tasks:
 
 Database setup, population, and test commands are documented in [db/README.md](db/README.md).
 
-Set up the private Git SSH server before starting the API; see
-[git-server/README.md](git-server/README.md). Its SSH identity and Git client are
-available through `AppState.git`.
+The API stores private Git repositories locally in `storage/git/projects/`.
+See [local Git storage](docs/git-storage.md); no Git server setup is needed.

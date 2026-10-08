@@ -1,8 +1,8 @@
 # API endpoints
 
-API startup loads the private Git SSH identity into `AppState.git`. Run the
-[Git server setup](../git-server/README.md) first; existing HTTP endpoints retain
-their current authentication and behavior.
+API startup prepares local Git storage in `storage/git/projects/` through
+`AppState.git`. Only the Git executable is required; see
+[local Git storage](../docs/git-storage.md).
 
 ## Project members
 

@@ -9,7 +9,7 @@ if ! command -v python3 >/dev/null; then
   exit 1
 fi
 snapshot_storage_dir="$(read_setting SNAPSHOT_STORAGE_DIR)"
-snapshot_storage_dir="${snapshot_storage_dir:-$script_dir/../../var/snapshots}"
+snapshot_storage_dir="${snapshot_storage_dir:-$script_dir/../../storage/snapshots}"
 if [[ "$snapshot_storage_dir" != /* ]]; then
   echo "SNAPSHOT_STORAGE_DIR must be an absolute path." >&2
   exit 1
