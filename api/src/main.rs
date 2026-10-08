@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routers::users_router())
         .merge(routers::organizations_router())
         .merge(routers::projects_router())
+        .merge(routers::connectors_router())
         .fallback(not_found)
         .with_state(app_state);
 
