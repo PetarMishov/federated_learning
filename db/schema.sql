@@ -152,18 +152,13 @@ CREATE TABLE snapshots (
     source_repository_url text,
     source_branch text,
     source_commit_sha text,
-    storage_key text NOT NULL UNIQUE,
-    content_sha256 text NOT NULL CHECK (content_sha256 ~ '^[0-9a-fA-F]{64}$'),
+    git_commit_sha text NOT NULL CHECK (git_commit_sha ~ '^[0-9a-f]{40}$'),
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (project_id, id),
-    CONSTRAINT snapshot_relative_key CHECK (
-        storage_key ~ '^[a-zA-Z0-9][a-zA-Z0-9._/-]*$'
-        AND storage_key !~ '(^|/)\.\.(/|$)'
-    )
+    UNIQUE (project_id, id)
 );
 
 COMMENT ON TABLE snapshots IS
-    'Immutable exact project files in local artifact storage, outside frontend assets. Never modify a published snapshot. Source commit is provenance; content hash identifies the stored artifact. Local imports need no Git history.';
+    'Immutable Git commits retained at refs/snapshots/<id> in storage/git/projects/<project_id>.git. git_commit_sha identifies stored files; source_commit_sha is optional external provenance. Never replace a published reference.';
 
 CREATE TABLE deployment_runs (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

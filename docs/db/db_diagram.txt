@@ -161,14 +161,13 @@ Table snapshots {
   source_repository_url text
   source_branch text
   source_commit_sha text
-  storage_key text [unique, not null]
-  content_sha256 text [not null]
+  git_commit_sha text [not null]
   created_at timestamptz [not null, default: `CURRENT_TIMESTAMP`]
   indexes {
     (project_id, id) [unique]
     created_by_user_id [name: 'snapshots_creator_idx']
   }
-  Note: 'CHECK constraints require a 64-character hexadecimal content hash and a relative storage key without parent traversal. Immutable exact project files at one revision, without .git/history. Files live in local artifact storage and hashes identify the archives. Source fields are provenance, not access grants. Snapshot survives unlinking. Publish contents to eligible organization members when a run becomes pending; provider repository browsing remains personal.'
+  Note: 'git_commit_sha is a 40-character lowercase Git commit ID. Each snapshot is retained at refs/snapshots/<id> in its project repository. Source fields are external provenance, not access grants. Published snapshots are immutable and survive provider unlinking.'
 }
 
 Enum run_status {

@@ -2,13 +2,16 @@
 
 The database uses one current schema during development. Keep table definitions
 in `schema.sql`, deployment functions and triggers in `deployment_rules.sql`, and
-demo data in `populate.sql`. There are no historical upgrade migrations.
+demo data in `populate.sql` and `populate_deployments.sql`.
+See the [database diagram](../docs/db/db_diagram.md) and its
+[DBML source](../docs/db/db_diagram.txt).
 
 ```text
 db/
   schema.sql                 Tables, enums, constraints, and indexes
   deployment_rules.sql       Permission checks and deployment lifecycle operations
-  populate.sql               Demo users, organizations, projects, and deployments
+  populate.sql               Demo users, organizations, and projects
+  populate_deployments.sql    Snapshot metadata and deployment fixtures
   fixtures/snapshots/        Example project files captured into snapshots
   scripts/                   Database startup, setup, population, and testing
     lib/                     Shared connection and snapshot helpers
@@ -26,10 +29,10 @@ Run commands from the repository root. Scripts read the root `.env`; an optional
 # Includes deployment_rules.sql.
 ./db/scripts/setup_db.sh
 
-# Populate demo data and prepare the matching snapshot files.
+# Populate demo data and prepare retained Git snapshots.
 ./db/scripts/populate_db.sh
 
-# Test in a temporary schema and temporary snapshot directory.
+# Test in a temporary schema and temporary Git storage directory.
 ./db/scripts/test_db.sh
 
 # Test recreation of a missing database and refusal to overwrite its tables.
@@ -61,7 +64,13 @@ place. Run setup and population again to recreate the database and demo data:
 ./db/scripts/populate_db.sh
 ```
 
-Snapshots default to `storage/snapshots/`, outside frontend assets and Git tracking.
-Set an absolute `SNAPSHOT_STORAGE_DIR` in `.env` to override that location. Use the
-population script rather than executing `populate.sql` directly: it writes the
-snapshot archives first and supplies their real hashes to SQL.
+Snapshots are Git commits retained at `refs/snapshots/<snapshot-id>` in
+`storage/git/projects/<project-id>.git`, outside frontend assets and Git tracking.
+Set an absolute `GIT_STORAGE_DIR` in `.env` to override the Git root.
+Population requires Git and Python 3. Use `populate_db.sh` rather than executing
+SQL directly: it creates projects, reserves snapshot IDs, publishes their commits
+and refs, then commits snapshot metadata and deployment fixtures. Reruns verify
+existing refs without overwriting them. Failed metadata publication can leave
+unused Git refs for later reconciliation.
+
+See [Git storage](../docs/git-storage.md) for details.

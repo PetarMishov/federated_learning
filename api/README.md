@@ -62,7 +62,8 @@ The organization and its owner's membership are inserted in one transaction.
 Project creation checks and locks current ownership and membership while
 inserting. New projects use `/data/input` and `/data/output` as container mount
 destinations and `.` as the build context, matching existing demo defaults.
-Creation does not publish a snapshot or start a deployment.
+Project creation also initializes its empty bare Git repository before committing
+the project row. Creation does not publish a snapshot or start a deployment.
 
 Missing, invalid, or revoked tokens return `401`. Invalid names return `400`;
 malformed JSON returns `400`, and missing, unknown, or incorrectly typed fields
@@ -82,3 +83,21 @@ requires a database account that can create schemas:
 TEST_DATABASE_URL='<postgres connection URL>' cargo test \
   creation_endpoints_persist_membership_and_enforce_project_ownership -- --ignored
 ```
+
+## Snapshot placeholders
+
+These routes are registered and return `501 Not Implemented`. Each handler has its
+own `.rs` file in `src/routers/projects/`. Authentication, request/response types,
+permission checks, pagination, uploads, and Git reads remain TODOs.
+
+| Endpoint | Planned purpose |
+| --- | --- |
+| `POST /projects/{proj_id}/snapshots` | Save a complete file tree as an immutable Git snapshot |
+| `GET /projects/{proj_id}/snapshots` | List snapshot metadata with pagination |
+| `GET /projects/{proj_id}/snapshots/{snapshot_id}` | Read snapshot metadata |
+| `GET /projects/{proj_id}/snapshots/{snapshot_id}/tree?path=...` | List a directory at the saved commit |
+| `GET /projects/{proj_id}/snapshots/{snapshot_id}/file?path=...` | Read or download one file |
+| `GET /projects/{proj_id}/snapshots/{snapshot_id}/archive` | Generate a download of the complete saved file tree |
+
+The database stores `git_commit_sha`; files are retained in the project's repository
+at `refs/snapshots/<snapshot-id>`. See [Git storage](../docs/git-storage.md).

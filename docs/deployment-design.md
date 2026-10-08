@@ -30,11 +30,11 @@ Users with the project's start permission, including organization owners, may ca
 
 Managing roles is an organization permission. Editing projects, starting deployments, and participating in deployments are granted separately for each project. Organization owners retain all permissions in their organization.
 
-Snapshot files will be stored locally, separately from editable working copies and outside frontend assets. The database retains file identity, source provenance, and storage references. Snapshot comparison does not require a GitHub or GitLab hosting service.
+Snapshot files live in each project’s private bare Git repository, separately from editable working copies and outside frontend assets. The database retains the stored commit ID, source provenance, and ownership metadata. Snapshot comparison does not require a GitHub or GitLab hosting service.
 
 ## Implementation scope
 
-Maintain the current development schema, database diagram, and demo permissions, snapshots, deployments, and participation states. Add local demo snapshot artifacts so population does not reference nonexistent files. Keep existing user, organization, project, and member API responses compatible; make only necessary small backend or frontend changes.
+Maintain the current development schema, database diagram, and demo permissions, snapshots, deployments, and participation states. Publish real demo Git commits and snapshot refs before recording their metadata. Keep existing user, organization, project, and member API responses compatible; make only necessary small backend or frontend changes.
 
 Execution orchestration, repository connectors, file editing, and unauthorized-behavior detection remain future features. Model the agreed rules and document the runtime operations that must enforce them.
 
@@ -44,11 +44,20 @@ If every joined participant leaves or is removed after execution starts, the dep
 
 ## Local development
 
-Database files live in `db/`; see [the database README](../db/README.md). On an empty database, run `./db/scripts/setup_db.sh`, then `./db/scripts/populate_db.sh`. Setup loads `schema.sql`, which includes `deployment_rules.sql`. On an already initialized database, population can be rerun safely. Development uses one current schema without upgrade migrations or legacy schema fixtures.
+Database files live in `db/`; see [the database README](../db/README.md). On an empty database, run `./db/scripts/setup_db.sh`, then `./db/scripts/populate_db.sh`. Setup loads `schema.sql`, which includes `deployment_rules.sql`. On an already initialized database, population can be rerun safely. Development uses one current schema.
 
-Snapshots default to `storage/snapshots/` at the repository root. An absolute `SNAPSHOT_STORAGE_DIR` in `.env` overrides it. The population script creates seven deterministic tar archives from the tracked fixtures, verifies existing files rather than overwriting them, and passes their real SHA-256 hashes to SQL. Files are read-only and are not served by the frontend. A storage key is relative to that private root. Archive publication must finish before committing a snapshot record; failed database publication may leave an unused artifact, which can be cleaned up later.
+Snapshots live in `storage/git/projects/<project-id>.git`. An absolute
+`GIT_STORAGE_DIR` in `.env` overrides the Git root. Each snapshot is retained at
+`refs/snapshots/<snapshot-id>` and its database record contains `git_commit_sha`.
+The population script builds deterministic Git commits from the tracked fixtures,
+verifies existing refs rather than replacing them, and publishes refs before
+committing metadata. Download archives will be generated from saved commits.
 
-Future import/download services must reject symlinks and traversal, exclude Git credentials/history and local datasets, verify artifact hashes, and authorize access against current project permissions. Compare snapshots by their file trees; a Git hosting server is unnecessary. The current helper prepares only the tracked demo fixtures, not arbitrary uploaded repositories.
+Future import/download handlers must reject traversal, exclude Git metadata and
+local datasets from uploaded file trees, and authorize access against current
+project permissions. Resolve files at the saved commit rather than a moving branch.
+The snapshot routes currently return `501 Not Implemented`; their handlers are
+placeholders. The current Git helper imports only API-owned local repositories.
 
 ## Database operations
 

@@ -1,48 +1,54 @@
-# Local Git storage
+# Local Git snapshot storage
 
-Only the Rust API accesses repositories. Install Git on the API host; no Python,
-SSH service, keys, Docker Git container, or setup script is required.
+The Rust API stores one bare Git repository per project at
+`storage/git/projects/<project-id>.git`. Set an absolute `GIT_STORAGE_DIR` in
+`.env` to override the Git root; repositories remain in its `projects/` directory.
+Only Git is needed at runtime. There is no SSH service or Git hosting container.
 
-API startup creates `storage/git/projects/` at the repository root. Each project
-uses a bare repository named `<project-id>.git`. Existing repositories remain
-usable in place. Optional `GIT_STORAGE_DIR` in `.env` sets an absolute alternative
-Git storage root; repositories live in its `projects/` subdirectory.
-Demo snapshot archives default to `storage/snapshots/`.
+A snapshot is a complete immutable file tree represented by a Git commit.
+The database stores `git_commit_sha` and metadata; the project repository retains
+that commit permanently at `refs/snapshots/<snapshot-id>`. Multiple snapshots
+share the project's repository. `source_commit_sha` is optional provenance from
+an external repository, not the identifier of the locally stored snapshot.
+Snapshots do not require separate extracted directories or permanent archives.
 
-After authenticating the caller and checking project permissions, handlers can
-use `AppState.git`:
+Project creation inserts the project within a database transaction, creates its
+empty repository, and then commits. Failed commits are checked after the original
+transaction finishes. Cleanup removes storage only when the project is confirmed
+absent. Unknown outcomes retain storage for later reconciliation.
 
-- `create_project_repository(project_id)` creates or reuses a bare repository.
-- `publish_snapshot(project_id, snapshot_id, source, commit_sha)` imports a commit
-  from an API-owned local Git repository and creates `refs/snapshots/<snapshot-id>`.
-- `list_snapshot_refs(project_id)` reads the published snapshot references.
+After authentication and project authorization, use `AppState.git`:
 
-Git operations return `Result<_, GitError>`, distinguishing invalid input, invalid
-output, I/O errors, timeouts, and failed commands. I/O errors retain their original
-source; failed commands retain exit status and stderr for internal diagnostics.
-Avoid exposing these diagnostics directly in HTTP responses.
+- `create_new_project_repository(project_id)` creates storage exclusively for a new project.
+- `create_project_repository(project_id)` initializes or reuses a bare repository.
+- `publish_snapshot(project_id, snapshot_id, source, commit_sha)` imports an
+  API-owned source commit and atomically creates its permanent snapshot reference.
+- `list_snapshot_refs(project_id)` reads retained snapshot references.
 
-Publication requires a full SHA-1 commit ID. Snapshot IDs contain ASCII letters,
-digits, underscores, or hyphens and start with a letter or digit. Git atomically
-checks that the reference does not exist, so concurrent publications cannot
-replace it. There is no snapshot deletion or replacement method. Administrators
-with filesystem access can still change repositories directly.
+References cannot be replaced through publication. Commits use full SHA-1 IDs.
+Import the commit and retain its reference before committing snapshot metadata.
+A failed database transaction may leave an unlisted reference; reconcile that
+later without deleting published snapshots or commits used by deployments.
+Database metadata and Git storage must be backed up together.
 
-The source repository must remain available and unchanged during import. HTTP
-uploads, constructing commits from uploaded files, database snapshot publication,
-and deployment execution are separate work. Existing project creation still
-creates only the database record; handlers must call the Git helpers explicitly.
+Snapshot HTTP routes currently return `501 Not Implemented`. Upload parsing,
+commit construction, metadata publication, tree/file reading, and archive download
+are future implementations. Downloads should generate archives from the saved
+commit on demand. The API must resolve snapshots through their project and check
+current permissions before reading files; it must not serve storage as public assets.
+
+## Demo data
+
+`./db/scripts/populate_db.sh` prepares deterministic commits from tracked fixtures,
+imports them into the same project repositories used by the API, and publishes
+`refs/snapshots/<snapshot-id>` before inserting snapshot/deployment metadata.
+Population can be rerun without replacing published refs or duplicating fixtures.
+Python is required only by these development scripts.
 
 Storage is excluded from version control. Restrict access to the API account and
-back up storage privately. New directories use mode 0700 on Unix. Symlink storage
-paths are rejected. Require any storage mount before starting the API.
+back it up privately. Directories use mode 0700 on Unix; symlink storage paths are
+rejected. Require the storage mount before starting the API.
 
-For installations using the previous setup, stop and remove the old
-`federated-learning-git` container. Repositories are retained in `storage/git/projects/`;
-old `storage/git/ssh/` keys are no longer used. `GIT_SSH_PORT` is no longer used.
-Existing demo archives have moved from the former storage location into
-`storage/snapshots/`; their relative database storage keys remain unchanged.
-An explicit `SNAPSHOT_STORAGE_DIR` override should point to the new location.
-
-Run `cargo test` from `api/` to exercise local creation, publication, and retention
-without a running Git service. Database integration tests remain opt-in.
+Run `cargo test --manifest-path api/Cargo.toml` for runtime Git checks and
+`python3 db/tests/test_git_snapshots.py` for demo storage checks. Database integration
+tests use temporary schemas; see [the database README](../db/README.md).

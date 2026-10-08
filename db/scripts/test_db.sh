@@ -12,8 +12,7 @@ cleanup() {
   rm -rf -- "$test_tempdir"
 }
 trap cleanup EXIT
-snapshot_hashes="$(python3 "$script_dir/lib/snapshots.py" "$test_tempdir/snapshots")"
-mapfile -t snapshot_hash_array <<< "$snapshot_hashes"
+source "$script_dir/lib/git_snapshots.sh"
 
 test_schema="fl_test_${BASHPID}_${RANDOM}"
 run_psql --quiet --command="CREATE SCHEMA $test_schema;"
@@ -26,11 +25,11 @@ if [[ "$setup_error" != *"Setup requires an empty schema."* ]]; then
   echo "Unexpected setup failure: $setup_error" >&2
   exit 1
 fi
+for iteration in 1 2; do
+  PGOPTIONS="-c search_path=$test_schema" run_psql --quiet --file="$script_dir/../populate.sql"
+  PGOPTIONS="-c search_path=$test_schema" populate_git_snapshots "$test_tempdir/git"
+done
 run_psql --quiet --command="SET search_path TO $test_schema;" \
-  --set="snapshot_v1_sha256=${snapshot_hash_array[0]}" \
-  --set="snapshot_v2_sha256=${snapshot_hash_array[1]}" \
-  --file="$script_dir/../populate.sql" \
-  --file="$script_dir/../populate.sql" \
   --file="$script_dir/../tests/deployment_lifecycle.sql"
-python3 "$script_dir/../tests/test_snapshot_files.py"
-echo "Database and snapshot checks passed."
+python3 "$script_dir/../tests/test_git_snapshots.py"
+echo "Database and Git snapshot checks passed."

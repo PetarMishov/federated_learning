@@ -37,7 +37,7 @@ BEGIN
     IF (SELECT count(*) FROM snapshots) <> 7 OR (SELECT count(*) FROM users) <> 6 THEN
         RAISE EXCEPTION 'Fixture population or rerun duplicated snapshots/users';
     END IF;
-    PERFORM expect_rejected(format('UPDATE snapshots SET storage_key = %L WHERE id = %s', 'different.tar', snapshot), 'snapshot mutation');
+    PERFORM expect_rejected(format('UPDATE snapshots SET git_commit_sha = %L WHERE id = %s', repeat('0', 40), snapshot), 'snapshot mutation');
     PERFORM expect_rejected(format('SELECT publish_deployment(%s, %s, %s, %L)', charlie, project, snapshot, 'Denied'), 'cross-organization publication');
     PERFORM expect_rejected(format('INSERT INTO role_permission(role_id, perm_id) SELECT %s, id FROM permissions WHERE name = %L', collaborator_role, 'edit_project'), 'project permission granted organization-wide');
     PERFORM expect_rejected(format('INSERT INTO role_project_permission(org_id,role_id,project_id,perm_id) SELECT p.org_id,%s,p.id,perm.id FROM projects p CROSS JOIN permissions perm WHERE p.name=%L AND perm.name=%L', collaborator_role, 'Federated learning benchmark', 'start_deployment'), 'cross-organization project grant');
