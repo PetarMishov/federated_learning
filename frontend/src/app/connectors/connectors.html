@@ -1,0 +1,30 @@
+<header>
+  <h1>Connectors</h1>
+  <p>Connect a repository provider to import project code. Only read access is needed.</p>
+</header>
+<div class="connector-grid">
+  <section class="connector-card" aria-labelledby="gitlab-heading">
+    <h2 id="gitlab-heading">GitLab</h2>
+    <p>Add or replace your personal access token with <code>read_user</code> and <code>read_repository</code> permissions.</p>
+    @if (connection(); as saved) {
+      <p class="connection-status" role="status">Token saved. Connected as <strong>{{ saved.external_username }}</strong>.</p>
+    }
+    <form (submit)="saveGitlab($event)" [attr.aria-busy]="saving()">
+      <label for="gitlab-token">Personal access token</label>
+      <input id="gitlab-token" type="password" autocomplete="off"
+        spellcheck="false" autocapitalize="none" maxlength="4096" required
+        aria-describedby="gitlab-token-help" [value]="token()" [disabled]="saving()"
+        #tokenInput (input)="token.set(tokenInput.value)">
+      <p id="gitlab-token-help" class="hint">The token is stored encrypted and is never shown again after saving.</p>
+      @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+      <button type="submit" [disabled]="saving() || !token().trim()">{{ saving() ? 'Saving…' : 'Save token' }}</button>
+    </form>
+  </section>
+  <section class="connector-card" aria-labelledby="github-heading">
+    <div class="card-heading"><h2 id="github-heading">GitHub</h2><span class="availability">Coming soon</span></div>
+    <p id="github-unavailable">GitHub token connections are not available yet.</p>
+    <label for="github-token">Personal access token</label>
+    <input id="github-token" type="password" autocomplete="off" disabled aria-describedby="github-unavailable">
+    <button type="button" disabled>Save token</button>
+  </section>
+</div>

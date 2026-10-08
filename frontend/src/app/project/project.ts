@@ -4,11 +4,12 @@ import { Component, DestroyRef, OnInit, inject, signal, computed, HostListener }
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { BehaviorSubject, EMPTY, Subject, catchError, finalize, startWith, switchMap, tap, skip, takeUntil, of } from 'rxjs';
-import { Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, UsersApi } from '../users-api';
+import { RepositoryPicker } from '../repository-picker/repository-picker';
+import { Repository, Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-project',
-  imports: [DatePipe, DecimalPipe],
+  imports: [DatePipe, DecimalPipe, RepositoryPicker],
   templateUrl: './project.html',
   styleUrl: './project.css',
 })
@@ -98,6 +99,8 @@ export class ProjectPage implements OnInit {
   protected readonly deploymentsLoading = signal(false);
   protected readonly deploymentsError = signal('');
   protected readonly source = signal<'github' | 'gitlab' | 'local'>('github');
+  protected readonly selectedRepository = signal<Repository | null>(null);
+  protected readonly repositoryProvider = computed(() => this.source() === 'gitlab' ? 'gitlab' : 'github');
   protected readonly drawer = signal<'members' | 'deployments' | null>(null);
   protected readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
@@ -343,6 +346,12 @@ export class ProjectPage implements OnInit {
       )),
       takeUntilDestroyed(this.destroyRef),
     ).subscribe();
+  }
+
+  protected selectSource(source: 'github' | 'gitlab' | 'local') {
+    if (this.source() === source) return;
+    this.source.set(source);
+    this.selectedRepository.set(null);
   }
 
   protected loadDeployments() {

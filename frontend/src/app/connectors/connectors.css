@@ -1,0 +1,20 @@
+:host { display: block; padding-top: 32px; }
+h1, h2 { margin: 0; font-weight: 500; }
+h1 { font-size: 26px; }
+h2 { font-size: 18px; }
+header { margin-bottom: 32px; }
+p { color: #555; font-size: 14px; line-height: 1.5; }
+.connector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; max-width: 1000px; }
+.connector-card { min-width: 0; padding: 24px; border: 1px solid #ccc; background: #fafafa; }
+.card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.availability { padding: 3px 8px; border: 1px solid #ccc; border-radius: 12px; color: #555; font-size: 12px; }
+label { display: block; margin: 20px 0 8px; font-size: 14px; }
+input { box-sizing: border-box; min-width: 0; width: 100%; padding: 8px 10px; border: 1px solid #aaa; background: white; font: inherit; }
+button { padding: 8px 12px; border: 1px solid #aaa; background: white; font: inherit; cursor: pointer; }
+button:disabled { cursor: default; color: #777; background: #eee; }
+.connector-card > button { margin-top: 16px; }
+.hint { font-size: 12px; }
+.connection-status { color: #275a35; overflow-wrap: anywhere; }
+.error { color: #a32121; }
+input:focus-visible, button:focus-visible { outline: 2px solid #444; outline-offset: 3px; }
+@media (max-width: 800px) { .connector-grid { grid-template-columns: 1fr; } }

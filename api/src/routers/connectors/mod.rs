@@ -1,21 +1,33 @@
+mod get_repositories;
 mod github;
 mod gitlab;
 
-use axum::{Router, routing::post};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use crate::state::AppState;
 
 pub fn connectors_router() -> Router<AppState> {
-    Router::new().merge(github::github_router()).route(
-        "/connectors/gitlab/authorize",
-        post(gitlab::authorization::authorize_request),
-    )
+    Router::new()
+        .merge(github::github_router())
+        .route(
+            "/connectors/gitlab/authorize",
+            post(gitlab::authorization::authorize_request),
+        )
+        .route(
+            "/connectors/{provider}/repositories",
+            get(get_repositories::get_repositories_request),
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connectors::gitlab::authorization::GitlabAuthorization;
+    use crate::connectors::{
+        gitlab::authorization::GitlabAuthorization, repositories::RepositoryClient,
+    };
     use axum::Extension;
     use jsonwebtoken::{DecodingKey, EncodingKey};
     use sqlx::PgPool;
@@ -26,6 +38,7 @@ mod tests {
         let secret = b"connector-test-secret-at-least-thirty-two-bytes";
         let app = connectors_router()
             .layer(Extension(None::<Arc<GitlabAuthorization>>))
+            .layer(Extension(None::<Arc<RepositoryClient>>))
             .with_state(AppState {
                 pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
                 encoding_key: EncodingKey::from_secret(secret),
@@ -49,6 +62,16 @@ mod tests {
                 request.send().await.unwrap().status(),
                 axum::http::StatusCode::UNAUTHORIZED
             );
+        }
+        for provider in ["github", "gitlab"] {
+            let response = client
+                .get(format!(
+                    "http://{address}/connectors/{provider}/repositories?page=1"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
         }
         let callback = client
             .get(format!(

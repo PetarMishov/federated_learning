@@ -1,8 +1,4 @@
-use aes_gcm::{
-    Aes256Gcm, KeyInit,
-    aead::{Aead, AeadCore, OsRng, Payload},
-};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use crate::connectors::credentials::TokenCipher;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{env, error::Error, time::Duration};
@@ -10,7 +6,7 @@ use std::{env, error::Error, time::Duration};
 pub struct GitlabAuthorization {
     client: Client,
     base_url: Url,
-    cipher: Aes256Gcm,
+    cipher: TokenCipher,
 }
 
 #[derive(Deserialize)]
@@ -79,9 +75,7 @@ impl GitlabAuthorization {
         {
             return Err("GITLAB_BASE_URL must be an HTTPS origin (HTTP allowed on loopback), without credentials, path, query or fragment".into());
         }
-        let key = STANDARD.decode(key)?;
-        let cipher = Aes256Gcm::new_from_slice(&key)
-            .map_err(|_| "CONNECTOR_TOKEN_KEY must decode to exactly 32 bytes")?;
+        let cipher = TokenCipher::new(key)?;
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15))
@@ -157,59 +151,21 @@ impl GitlabAuthorization {
     }
 
     fn encrypt(&self, user_id: i32, token: &str) -> Result<String, AuthorizationError> {
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let associated = format!("gitlab:{user_id}:access");
-        let encrypted = self
-            .cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: token.as_bytes(),
-                    aad: associated.as_bytes(),
-                },
-            )
-            .map_err(|_| AuthorizationError::Internal)?;
-        let mut bytes = nonce.to_vec();
-        bytes.extend(encrypted);
-        Ok(format!("v1:{}", STANDARD.encode(bytes)))
+        self.cipher
+            .encrypt("gitlab", user_id, token)
+            .map_err(|_| AuthorizationError::Internal)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::Nonce;
     use axum::{
         Json, Router,
         http::{HeaderMap, StatusCode},
         routing::get,
     };
-
-    #[test]
-    fn encryption_is_randomized_and_bound_to_the_local_user() {
-        let service =
-            GitlabAuthorization::new("https://gitlab.com", &STANDARD.encode([7; 32])).unwrap();
-        let first = service.encrypt(12, "secret-token").unwrap();
-        assert_ne!(first, service.encrypt(12, "secret-token").unwrap());
-        let mut bytes = STANDARD.decode(first.strip_prefix("v1:").unwrap()).unwrap();
-        let nonce = Nonce::from(<[u8; 12]>::try_from(&bytes[..12]).unwrap());
-        let decrypt = |bytes: &[u8], aad: &[u8]| {
-            service.cipher.decrypt(
-                &nonce,
-                Payload {
-                    msg: &bytes[12..],
-                    aad,
-                },
-            )
-        };
-        assert_eq!(
-            decrypt(&bytes, b"gitlab:12:access").unwrap(),
-            b"secret-token"
-        );
-        assert!(decrypt(&bytes, b"gitlab:13:access").is_err());
-        *bytes.last_mut().unwrap() ^= 1;
-        assert!(decrypt(&bytes, b"gitlab:12:access").is_err());
-    }
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     #[test]
     fn rejects_unsafe_configuration() {

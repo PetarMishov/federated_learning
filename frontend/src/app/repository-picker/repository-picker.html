@@ -1,0 +1,34 @@
+<div class="repository-picker">
+  <label [id]="'repository-label-' + provider()">Repository</label>
+  <button type="button" class="repository-trigger" aria-haspopup="listbox"
+    [attr.aria-labelledby]="'repository-label-' + provider() + ' repository-value-' + provider()"
+    [attr.aria-expanded]="open()" [attr.aria-controls]="'repository-list-' + provider()" (click)="toggle()">
+    <span [id]="'repository-value-' + provider()">{{ selected()?.full_name || 'Select repository' }}</span><span aria-hidden="true">▾</span>
+  </button>
+  @if (open()) {
+    <div class="repository-dropdown" (keydown.escape)="dismiss($event)">
+      <input type="search" role="combobox" aria-label="Search repositories" autocomplete="off"
+        aria-autocomplete="list" aria-expanded="true" [attr.aria-controls]="'repository-list-' + provider()"
+        [attr.aria-activedescendant]="filtered().length ? 'repository-option-' + provider() + '-' + activeIndex() : null"
+        (keydown)="key($event)" placeholder="Search repositories…" #searchInput [value]="query()" (input)="search(searchInput.value)">
+      <ul class="repository-list" role="listbox" [id]="'repository-list-' + provider()" aria-label="Repositories" [attr.aria-busy]="loading()">
+        @for (repository of filtered(); track repository.id; let index = $index) {
+          <li role="none">
+            <button type="button" role="option" tabindex="-1" [id]="'repository-option-' + provider() + '-' + index"
+              [class.active]="activeIndex() === index" [attr.aria-selected]="selected()?.id === repository.id"
+              (mousedown)="$event.preventDefault()" (click)="choose(repository)">{{ repository.full_name }}</button>
+          </li>
+        }
+      </ul>
+      <div class="repository-status" aria-live="polite">
+        @if (loading()) { <p role="status">{{ repositories().length ? 'Loading more repositories…' : 'Loading repositories…' }}</p> }
+        @if (error()) {
+          <p role="alert">{{ error() }}</p>
+          <button type="button" (click)="load()">Try again</button>
+        } @else if (!loading() && !filtered().length) {
+          <p>{{ repositories().length ? 'No matching repositories.' : 'No repositories available.' }}</p>
+        }
+      </div>
+    </div>
+  }
+</div>

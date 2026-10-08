@@ -38,6 +38,16 @@ pub async fn save_gitlab_connection(
     Ok(result.rows_affected() == 1)
 }
 
+/// Credentials are always scoped to the authenticated user and usable connection.
+pub async fn get_connection_token(
+    pool: &PgPool,
+    user_id: i32,
+    provider: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT access_token_encrypted FROM provider_connections WHERE user_id = $1 AND provider = $2::text::provider_kind AND invalidated_at IS NULL AND (token_expires_at IS NULL OR token_expires_at > clock_timestamp())")
+        .bind(user_id).bind(provider).fetch_optional(pool).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

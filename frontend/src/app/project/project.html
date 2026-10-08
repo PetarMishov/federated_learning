@@ -11,11 +11,11 @@
   <h2 id="snapshot-heading">Import project</h2>
       <div class="snapshot-sources" role="group" aria-label="Snapshot source">
         <button type="button" [attr.aria-pressed]="source() === 'github'"
-          (click)="source.set('github')">GitHub</button>
+          (click)="selectSource('github')">GitHub</button>
         <button type="button" [attr.aria-pressed]="source() === 'gitlab'"
-          (click)="source.set('gitlab')">GitLab</button>
+          (click)="selectSource('gitlab')">GitLab</button>
         <button type="button" [attr.aria-pressed]="source() === 'local'"
-          (click)="source.set('local')">Local Folder</button>
+          (click)="selectSource('local')">Local Folder</button>
       </div>
       <div class="snapshot-fields">
         @if (source() === 'local') {
@@ -24,6 +24,7 @@
             <input id="snapshot-path" type="text" placeholder="/path/to/project">
           </div>
         } @else {
+          <app-repository-picker [provider]="repositoryProvider()" (selectionChange)="selectedRepository.set($event)" />
           <div class="snapshot-field">
             <label for="snapshot-branch">Branch</label>
             <input id="snapshot-branch" type="text" placeholder="main">

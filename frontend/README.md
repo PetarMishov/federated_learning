@@ -80,3 +80,31 @@ and expiry timestamps rather than bearer tokens. Revocations survive API restart
 
 For production hosting, route `/users/**` to the API through your web server;
 the Angular development proxy is only used by `ng serve`. Notifications load from the API.
+
+## Repository selection
+
+The project import controls include a searchable repository dropdown for GitHub
+and GitLab. Opening it loads the caller's saved connection's repositories, fetching
+all pages automatically. Search matches namespace/owner and repository names
+without case sensitivity. The list scrolls and supports arrow keys, Enter, and
+Escape. Switching source clears the selection and cancels outstanding requests;
+local folder imports have no repository selector.
+
+The API serves `GET /connectors/{github|gitlab}/repositories?page=1`. Missing or
+rejected provider credentials produce an explanatory message and retry control.
+GitHub token authorization remains a backend placeholder; its repository list
+requires an existing saved GitHub connection. GitLab connections can be created
+through the existing token authorization endpoint. Repository import itself is
+still separate from selecting a repository.
+
+## Connectors page
+
+The sidebar links to `/connectors`, protected by the existing login guard.
+GitLab's personal access token form submits to the existing
+`POST /connectors/gitlab/authorize` endpoint. Tokens remain masked without a reveal control, are cleared
+after a successful save, and never persisted in browser storage. The page displays
+the returned account name and explains failures so users can retry. Saved status
+reflects saves in the current visit; there is no connection-status endpoint to
+restore it after navigating away. GitHub's form is disabled with a Coming soon
+message because its authorization endpoint is not implemented. This page requires
+no backend changes.

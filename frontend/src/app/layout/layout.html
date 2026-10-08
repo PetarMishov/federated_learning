@@ -22,7 +22,7 @@
         </ul>
       }
     </details>
-    <a role="link" aria-disabled="true">Connectors</a>
+    <a routerLink="/connectors">Connectors</a>
   </nav>
   <div class="sidebar-footer">
     <button class="logout" type="button" [disabled]="loggingOut()" (click)="logout()">{{ loggingOut() ? 'Logging out…' : 'Logout' }}</button>

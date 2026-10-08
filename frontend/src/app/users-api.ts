@@ -103,6 +103,25 @@ export interface NotificationList {
   notifications: Notification[];
 }
 
+export type RepositoryProvider = 'github' | 'gitlab';
+
+export interface Repository {
+  id: number;
+  full_name: string;
+  web_url: string;
+}
+
+export interface ProviderConnection {
+  provider: RepositoryProvider;
+  external_account_id: string;
+  external_username: string;
+}
+
+export interface RepositoryList {
+  repositories: Repository[];
+  has_more: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class UsersApi {
   private readonly http = inject(HttpClient);
@@ -147,6 +166,19 @@ export class UsersApi {
   getOrganizationMembers(orgId: string) {
     return this.http.get<MemberList>(`/organizations/${encodeURIComponent(orgId)}/members`, {
       headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  authorizeGitlab(token: string) {
+    return this.http.post<ProviderConnection>('/connectors/gitlab/authorize', { token }, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  getRepositories(provider: RepositoryProvider, page = 1) {
+    return this.http.get<RepositoryList>(`/connectors/${provider}/repositories`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+      params: { page },
     });
   }
 

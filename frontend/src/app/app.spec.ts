@@ -19,6 +19,15 @@ describe('Authentication routes', () => {
     sessionStorage.clear();
   });
 
+  it('guards the connectors page when logged out', async () => {
+    const fixture = TestBed.createComponent(App);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/connectors');
+    await fixture.whenStable();
+    expect(router.url).toBe('/login');
+    expect(fixture.nativeElement.querySelector('app-connectors')).toBeNull();
+  });
+
   it('starts on login without a sidebar and guards home', async () => {
     const fixture = TestBed.createComponent(App);
     const router = TestBed.inject(Router);

@@ -19,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decoding_key = state::decoding_key(&secret)?;
     let git = git::GitClient::from_env()?;
     let gitlab = connectors::gitlab::authorization::GitlabAuthorization::from_env()?.map(Arc::new);
+    let repositories = connectors::repositories::RepositoryClient::from_env()?.map(Arc::new);
     let options = db::connection_options()?;
     let pool = db::create_pool(options).await?;
     let app_state = state::AppState {
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routers::connectors_router())
         .fallback(not_found)
         .layer(Extension(gitlab))
+        .layer(Extension(repositories))
         .with_state(app_state);
 
     let listener: TcpListener = TcpListener::bind("0.0.0.0:3000").await?;

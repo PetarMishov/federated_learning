@@ -1,0 +1,15 @@
+:host { display: block; flex: 1 1 260px; min-width: 180px; }
+.repository-picker { position: relative; }
+label { display: block; margin-bottom: 6px; font-size: 13px; }
+.repository-trigger { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; }
+.repository-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button, input { box-sizing: border-box; padding: 6px 10px; border: 1px solid #aaa; background: white; font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid #444; outline-offset: 2px; }
+.repository-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; min-width: 240px; padding: 8px; border: 1px solid #aaa; background: white; box-shadow: 0 4px 16px #0002; }
+input { width: 100%; }
+.repository-list { max-height: 240px; overflow-y: auto; list-style: none; padding: 0; margin: 8px 0 0; }
+.repository-list button { width: 100%; border: 0; text-align: left; overflow-wrap: anywhere; }
+.repository-list button:hover, .repository-list button.active { background: #eee; }
+.repository-list button[aria-selected='true'] { font-weight: 600; }
+.repository-status p { margin: 8px 0; font-size: 13px; }

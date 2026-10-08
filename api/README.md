@@ -330,3 +330,36 @@ separate work.
 
 References: [GitLab token API](https://docs.gitlab.com/api/personal_access_tokens/)
 and [read scopes](https://docs.gitlab.com/security/tokens/access_token_scopes/).
+
+## Provider repositories
+
+`GET /connectors/{provider}/repositories?page=1` accepts `github` or `gitlab` and
+requires a local session bearer token. It returns a page of up to 100 repositories:
+
+```json
+{"repositories":[{"id":42,"full_name":"Lab/Training","web_url":"https://gitlab.com/Lab/Training"}],"has_more":false}
+```
+
+The API looks up only the caller's active, unexpired connection and decrypts its
+credential with `CONNECTOR_TOKEN_KEY`. The existing `v1:` encrypted token format
+is preserved; encryption and decryption are shared by the connectors. Credentials
+are never returned to the browser. Requests only use GET and redirects are rejected.
+GitHub discovery uses `/user/repos`; GitLab uses
+`/api/v4/personal_access_tokens/self/associations` (GitLab 17.4+), which supports
+the existing read scopes without requiring additional API permissions. Provider
+pagination URLs are constructed locally. A full final page may trigger one extra
+request before `has_more` becomes false. Pages must be between 1 and 10000.
+
+Missing, expired, or invalidated connections return `404`; rejected provider tokens
+return `403`; provider/network errors return `502`. Local session failures return
+`401`; absent connector configuration returns `503`; database/decryption failures
+return `500`. Responses disable caching. GitHub discovery requires a saved GitHub
+connection; GitHub authorization remains a separate placeholder.
+
+The frontend fetches pages on opening the selector, searches every loaded
+repository name and namespace without case sensitivity, and clears repository
+selection on provider changes. The repository choice is kept in the project form
+alongside branch/commit inputs; executing provider imports remains separate work.
+
+References: [GitHub repository discovery](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)
+and [GitLab token associations](https://docs.gitlab.com/api/personal_access_tokens/#list-all-token-associations).
