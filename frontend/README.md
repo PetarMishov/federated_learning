@@ -107,3 +107,17 @@ restore it after navigating away. Both forms have independent saving and error
 states. GitHub users should select repositories on a fine-grained token and
 grant Contents read-only permission; classic tokens can use `repo` for private
 repositories. Configure `CONNECTOR_TOKEN_KEY` in the API to enable both providers.
+
+## Branch and commit selection
+
+After selecting a repository, open the branch dropdown to load and search all
+branch names, with the same keyboard navigation, pagination, retry, and dismissal
+behavior as the repository picker. Selecting a branch fills the commit field with
+its newest (head) commit SHA. The SHA remains editable for choosing a historical
+commit. Changing the repository/provider clears branch and commit selections;
+changing branches selects the new branch's head.
+
+GitLab tokens require `read_api` and `read_repository`; replace older saved tokens
+that only have `read_user` and `read_repository`. GitHub fine-grained tokens need
+Contents read permission. Loading/deploying project code from a selected provider
+commit remains future work.

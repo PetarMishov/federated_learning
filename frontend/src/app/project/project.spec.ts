@@ -54,6 +54,42 @@ describe('Project sidebars', () => {
     return fixture;
   }
 
+  it('defaults the commit to the chosen branch head, allows overrides, and clears stale selections', async () => {
+    const fixture = TestBed.createComponent(ProjectPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    snapshotListRequest().flush({ snapshots: [], has_more: false });
+    http.expectOne('/projects/7/deployments').flush({ deployments: [] });
+    fixture.nativeElement.querySelector('.repository-trigger').click();
+    http.expectOne('/connectors/github/repositories?page=1').flush({ repositories: [{ id: 42, full_name: 'Org/Repo', web_url: 'https://github.com/Org/Repo' }], has_more: false });
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('app-repository-picker [role="option"]').click();
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('.branch-trigger').click();
+    http.expectOne(req => req.url === '/connectors/github/branches').flush({ branches: [
+      { name: 'main', commit_sha: 'a'.repeat(40) },
+      { name: 'release', commit_sha: 'b'.repeat(40) },
+    ], has_more: false });
+    await fixture.whenStable();
+    fixture.nativeElement.querySelector('app-branch-picker [role="option"]').click();
+    await fixture.whenStable();
+    const commit = fixture.nativeElement.querySelector('#snapshot-commit');
+    expect(commit.value).toBe('a'.repeat(40));
+    commit.value = 'c'.repeat(40);
+    commit.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    expect(commit.value).toBe('c'.repeat(40));
+    fixture.nativeElement.querySelector('.branch-trigger').click();
+    fixture.detectChanges();
+    fixture.nativeElement.querySelectorAll('app-branch-picker [role="option"]')[1].click();
+    await fixture.whenStable();
+    expect(commit.value).toBe('b'.repeat(40));
+    fixture.nativeElement.querySelector('.snapshot-sources button:nth-child(2)').click();
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('#snapshot-commit').value).toBe('');
+    expect(fixture.nativeElement.querySelector('.branch-trigger').disabled).toBe(true);
+  });
+
   it('loads members on opening the sidebar and displays their usernames and roles', async () => {
     const fixture = openMembers();
     expect(fixture.nativeElement.querySelector('.drawer').textContent).toContain('Loading members...');

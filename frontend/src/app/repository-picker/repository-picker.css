@@ -1,7 +1,7 @@
-:host { display: block; flex: 1 1 260px; min-width: 180px; }
-.repository-picker { position: relative; }
-label { display: block; margin-bottom: 6px; font-size: 13px; }
-.repository-trigger { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; }
+:host { display: block; flex: 1 1 220px; min-width: 180px; }
+.repository-picker { position: relative; display: flex; align-items: center; gap: 8px; }
+label { flex-shrink: 0; font-size: 13px; }
+.repository-trigger { display: flex; justify-content: space-between; gap: 12px; flex: 1; min-width: 0; text-align: left; }
 .repository-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button, input { box-sizing: border-box; padding: 6px 10px; border: 1px solid #aaa; background: white; font: inherit; }
 button { cursor: pointer; }

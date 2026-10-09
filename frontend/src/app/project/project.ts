@@ -4,12 +4,13 @@ import { Component, DestroyRef, OnInit, inject, signal, computed, HostListener }
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { BehaviorSubject, EMPTY, Subject, catchError, finalize, startWith, switchMap, tap, skip, takeUntil, of } from 'rxjs';
+import { BranchPicker } from '../branch-picker/branch-picker';
 import { RepositoryPicker } from '../repository-picker/repository-picker';
-import { Repository, Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, UsersApi } from '../users-api';
+import { Branch, Repository, Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, UsersApi } from '../users-api';
 
 @Component({
   selector: 'app-project',
-  imports: [DatePipe, DecimalPipe, RepositoryPicker],
+  imports: [DatePipe, DecimalPipe, RepositoryPicker, BranchPicker],
   templateUrl: './project.html',
   styleUrl: './project.css',
 })
@@ -100,6 +101,8 @@ export class ProjectPage implements OnInit {
   protected readonly deploymentsError = signal('');
   protected readonly source = signal<'github' | 'gitlab' | 'local'>('github');
   protected readonly selectedRepository = signal<Repository | null>(null);
+  protected readonly selectedBranch = signal<Branch | null>(null);
+  protected readonly sourceCommit = signal('');
   protected readonly repositoryProvider = computed(() => this.source() === 'gitlab' ? 'gitlab' : 'github');
   protected readonly drawer = signal<'members' | 'deployments' | null>(null);
   protected readonly queryParams = toSignal(this.route.queryParamMap, {
@@ -351,7 +354,17 @@ export class ProjectPage implements OnInit {
   protected selectSource(source: 'github' | 'gitlab' | 'local') {
     if (this.source() === source) return;
     this.source.set(source);
-    this.selectedRepository.set(null);
+    this.selectRepository(null);
+  }
+
+  protected selectRepository(repository: Repository | null) {
+    this.selectedRepository.set(repository);
+    this.selectBranch(null);
+  }
+
+  protected selectBranch(branch: Branch | null) {
+    this.selectedBranch.set(branch);
+    this.sourceCommit.set(branch?.commit_sha ?? '');
   }
 
   protected loadDeployments() {

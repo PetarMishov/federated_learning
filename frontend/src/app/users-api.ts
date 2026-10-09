@@ -122,6 +122,16 @@ export interface RepositoryList {
   has_more: boolean;
 }
 
+export interface Branch {
+  name: string;
+  commit_sha: string;
+}
+
+export interface BranchList {
+  branches: Branch[];
+  has_more: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class UsersApi {
   private readonly http = inject(HttpClient);
@@ -185,6 +195,13 @@ export class UsersApi {
     return this.http.get<RepositoryList>(`/connectors/${provider}/repositories`, {
       headers: { Authorization: `Bearer ${this.token()}` },
       params: { page },
+    });
+  }
+
+  getBranches(provider: RepositoryProvider, repository: Repository, page = 1) {
+    return this.http.get<BranchList>(`/connectors/${provider}/branches`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+      params: { repository: provider === 'github' ? repository.full_name : String(repository.id), page },
     });
   }
 

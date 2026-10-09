@@ -1,0 +1,34 @@
+<div class="branch-picker">
+  <label [id]="'branch-label-' + provider()">Branch</label>
+  <button type="button" class="branch-trigger" aria-haspopup="listbox"
+    [attr.aria-labelledby]="'branch-label-' + provider() + ' branch-value-' + provider()"
+    [attr.aria-expanded]="open()" [attr.aria-controls]="'branch-list-' + provider()" [disabled]="!repository()" (click)="toggle()">
+    <span [id]="'branch-value-' + provider()">{{ selected()?.name || 'Select branch' }}</span><span aria-hidden="true">▾</span>
+  </button>
+  @if (open()) {
+    <div class="branch-dropdown" (keydown.escape)="dismiss($event)">
+      <input type="search" role="combobox" aria-label="Search branches" autocomplete="off"
+        aria-autocomplete="list" aria-expanded="true" [attr.aria-controls]="'branch-list-' + provider()"
+        [attr.aria-activedescendant]="filtered().length ? 'branch-option-' + provider() + '-' + activeIndex() : null"
+        (keydown)="key($event)" placeholder="Search branches…" #searchInput [value]="query()" (input)="search(searchInput.value)">
+      <ul class="branch-list" role="listbox" [id]="'branch-list-' + provider()" aria-label="Branches" [attr.aria-busy]="loading()">
+        @for (branch of filtered(); track branch.name; let index = $index) {
+          <li role="none">
+            <button type="button" role="option" tabindex="-1" [id]="'branch-option-' + provider() + '-' + index"
+              [class.active]="activeIndex() === index" [attr.aria-selected]="selected()?.name === branch.name"
+              (mousedown)="$event.preventDefault()" (click)="choose(branch)">{{ branch.name }}</button>
+          </li>
+        }
+      </ul>
+      <div class="branch-status" aria-live="polite">
+        @if (loading()) { <p role="status">{{ branches().length ? 'Loading more branches…' : 'Loading branches…' }}</p> }
+        @if (error()) {
+          <p role="alert">{{ error() }}</p>
+          <button type="button" (click)="load()">Try again</button>
+        } @else if (!loading() && !filtered().length) {
+          <p>{{ branches().length ? 'No matching branches.' : 'No branches available.' }}</p>
+        }
+      </div>
+    </div>
+  }
+</div>

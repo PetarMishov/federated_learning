@@ -63,6 +63,30 @@ struct GitlabAssociations {
     projects: Vec<GitlabProject>,
 }
 
+#[derive(Serialize)]
+pub struct Branch {
+    pub name: String,
+    pub commit_sha: String,
+}
+
+#[derive(Serialize)]
+pub struct BranchList {
+    pub branches: Vec<Branch>,
+    pub has_more: bool,
+}
+
+#[derive(Deserialize)]
+struct ProviderBranch {
+    name: String,
+    commit: BranchCommit,
+}
+
+#[derive(Deserialize)]
+struct BranchCommit {
+    #[serde(alias = "id")]
+    sha: String,
+}
+
 impl RepositoryClient {
     pub fn from_env() -> Result<Option<Self>, Box<dyn Error>> {
         let key = match env::var("CONNECTOR_TOKEN_KEY") {
@@ -107,6 +131,78 @@ impl RepositoryClient {
             github_url,
             cipher: TokenCipher::new(key)?,
         })
+    }
+
+    pub async fn branches(
+        &self,
+        provider: Provider,
+        user_id: i32,
+        encrypted_token: &str,
+        repository: &str,
+        page: u32,
+    ) -> Result<BranchList, RepositoryError> {
+        let token = self
+            .cipher
+            .decrypt(provider.name(), user_id, encrypted_token)
+            .map_err(|_| RepositoryError::InvalidCredential)?;
+        let mut url = match provider {
+            Provider::Github => {
+                let parts: Vec<_> = repository.split('/').collect();
+                if parts.len() != 2
+                    || parts
+                        .iter()
+                        .any(|part| part.is_empty() || *part == "." || *part == "..")
+                {
+                    return Err(RepositoryError::Rejected);
+                }
+                let mut url = self.github_url.clone();
+                url.path_segments_mut()
+                    .map_err(|_| RepositoryError::Unavailable)?
+                    .pop_if_empty()
+                    .extend(["repos", parts[0], parts[1], "branches"]);
+                url
+            }
+            Provider::Gitlab => {
+                if repository.parse::<i64>().ok().is_none_or(|id| id <= 0) {
+                    return Err(RepositoryError::Rejected);
+                }
+                self.gitlab_url
+                    .join(&format!("api/v4/projects/{repository}/repository/branches"))
+                    .map_err(|_| RepositoryError::Unavailable)?
+            }
+        };
+        url.query_pairs_mut()
+            .append_pair("per_page", "100")
+            .append_pair("page", &page.to_string());
+        let request = self.client.get(url);
+        let request = match provider {
+            Provider::Github => request
+                .bearer_auth(token)
+                .header("Accept", "application/vnd.github+json"),
+            Provider::Gitlab => request.header("PRIVATE-TOKEN", token),
+        };
+        let response = request
+            .send()
+            .await
+            .map_err(|_| RepositoryError::Unavailable)?;
+        if matches!(response.status().as_u16(), 401 | 403 | 404) {
+            return Err(RepositoryError::Rejected);
+        }
+        if !response.status().is_success() {
+            return Err(RepositoryError::Unavailable);
+        }
+        let branches: Vec<Branch> = response
+            .json::<Vec<ProviderBranch>>()
+            .await
+            .map_err(|_| RepositoryError::Unavailable)?
+            .into_iter()
+            .map(|branch| Branch {
+                name: branch.name,
+                commit_sha: branch.commit.sha,
+            })
+            .collect();
+        let has_more = branches.len() >= 100;
+        Ok(BranchList { branches, has_more })
     }
 
     pub async fn list(
@@ -241,6 +337,58 @@ mod tests {
             assert!(!serde_json::to_string(&page).unwrap().contains("saved-"));
             assert_eq!(
                 client.list(provider, 13, &token, 2).await.err(),
+                Some(RepositoryError::InvalidCredential)
+            );
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn loads_branch_heads_for_gitlab_and_github_enterprise_and_paginates() {
+        let app = Router::new()
+            .route("/api/v3/repos/Org/Repo/branches", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(headers["authorization"], "Bearer branch-token");
+                assert_eq!(query["per_page"], "100");
+                assert_eq!(query["page"], "2");
+                Json(vec![serde_json::json!({"name": "feature/topic", "commit": {"sha": "abc123"}}); 100])
+            }))
+            .route("/api/v4/projects/42/repository/branches", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(headers["private-token"], "branch-token");
+                assert_eq!(query["page"], "2");
+                Json(serde_json::json!([{"name": "main", "commit": {"id": "def456"}}]))
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client =
+            RepositoryClient::new(&base, &format!("{base}/api/v3"), &STANDARD.encode([7; 32]))
+                .unwrap();
+        for (provider, repository, head, has_more) in [
+            (Provider::Github, "Org/Repo", "abc123", true),
+            (Provider::Gitlab, "42", "def456", false),
+        ] {
+            let token = client
+                .cipher
+                .encrypt(provider.name(), 12, "branch-token")
+                .unwrap();
+            let result = client
+                .branches(provider, 12, &token, repository, 2)
+                .await
+                .unwrap();
+            assert_eq!(result.branches[0].commit_sha, head);
+            assert_eq!(result.has_more, has_more);
+            assert!(
+                !serde_json::to_string(&result)
+                    .unwrap()
+                    .contains("branch-token")
+            );
+            assert_eq!(
+                client
+                    .branches(provider, 13, &token, repository, 2)
+                    .await
+                    .err(),
                 Some(RepositoryError::InvalidCredential)
             );
         }

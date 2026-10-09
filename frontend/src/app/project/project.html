@@ -24,14 +24,14 @@
             <input id="snapshot-path" type="text" placeholder="/path/to/project">
           </div>
         } @else {
-          <app-repository-picker [provider]="repositoryProvider()" (selectionChange)="selectedRepository.set($event)" />
-          <div class="snapshot-field">
-            <label for="snapshot-branch">Branch</label>
-            <input id="snapshot-branch" type="text" placeholder="main">
-          </div>
+          <app-repository-picker [provider]="repositoryProvider()" (selectionChange)="selectRepository($event)" />
+          <app-branch-picker [provider]="repositoryProvider()" [repository]="selectedRepository()"
+            (selectionChange)="selectBranch($event)" />
           <div class="snapshot-field">
             <label for="snapshot-commit">Commit</label>
-            <input id="snapshot-commit" type="text" placeholder="Commit SHA">
+            <input id="snapshot-commit" type="text" placeholder="Commit SHA" #commitInput
+              [value]="sourceCommit()" (input)="sourceCommit.set(commitInput.value)" [disabled]="!selectedBranch()"
+              title="Latest branch commit; editable">
           </div>
         }
         <button type="button">Load project</button>

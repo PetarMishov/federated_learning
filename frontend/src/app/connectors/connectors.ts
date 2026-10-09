@@ -51,7 +51,7 @@ export class ConnectorsPage {
           void this.router.navigateByUrl('/login');
         } else {
           this.error.set(error.status === 400
-            ? 'GitLab rejected this token. Check that it is active and has read_user and read_repository permissions.'
+            ? 'GitLab rejected this token. Check that it is active and has read_api and read_repository permissions.'
             : error.status === 503 ? 'GitLab connections are unavailable right now. Please try again later.'
             : 'Could not save your GitLab token. Please try again.');
         }

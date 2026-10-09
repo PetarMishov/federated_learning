@@ -1,3 +1,4 @@
+mod get_branches;
 mod get_repositories;
 mod github;
 mod gitlab;
@@ -13,12 +14,16 @@ pub fn connectors_router() -> Router<AppState> {
     Router::new()
         .merge(github::github_router())
         .route(
-            "/connectors/{provider}/authorize",
+            "/connectors/gitlab/authorize",
             post(gitlab::authorization::authorize_request),
         )
         .route(
             "/connectors/{provider}/repositories",
             get(get_repositories::get_repositories_request),
+        )
+        .route(
+            "/connectors/{provider}/branches",
+            get(get_branches::get_branches_request),
         )
 }
 
@@ -71,6 +76,16 @@ mod tests {
             let response = client
                 .get(format!(
                     "http://{address}/connectors/{provider}/repositories?page=1"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        }
+        for provider in ["github", "gitlab"] {
+            let response = client
+                .get(format!(
+                    "http://{address}/connectors/{provider}/branches?repository=42&page=1"
                 ))
                 .send()
                 .await

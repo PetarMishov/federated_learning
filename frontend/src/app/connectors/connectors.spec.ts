@@ -98,7 +98,7 @@ describe('Connectors page', () => {
     const http = TestBed.inject(HttpTestingController);
     http.expectOne('/connectors/gitlab/authorize').flush('Missing permissions', { status: 400, statusText: 'Bad request' });
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('[role="alert"]').textContent).toContain('read_user and read_repository');
+    expect(fixture.nativeElement.querySelector('[role="alert"]').textContent).toContain('read_api and read_repository');
     expect(fixture.nativeElement.querySelector('#gitlab-token').value).toBe('glpat-example');
     fixture.nativeElement.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }));
     http.expectOne('/connectors/gitlab/authorize').flush(connection);

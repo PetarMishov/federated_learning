@@ -1,0 +1,15 @@
+:host { display: block; flex: 1 1 160px; min-width: 140px; }
+.branch-picker { position: relative; display: flex; align-items: center; gap: 8px; }
+label { flex-shrink: 0; font-size: 13px; }
+.branch-trigger { display: flex; justify-content: space-between; gap: 12px; flex: 1; min-width: 0; text-align: left; }
+.branch-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button, input { box-sizing: border-box; padding: 6px 10px; border: 1px solid #aaa; background: white; font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid #444; outline-offset: 2px; }
+.branch-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; min-width: 240px; padding: 8px; border: 1px solid #aaa; background: white; box-shadow: 0 4px 16px #0002; }
+input { width: 100%; }
+.branch-list { max-height: 240px; overflow-y: auto; list-style: none; padding: 0; margin: 8px 0 0; }
+.branch-list button { width: 100%; border: 0; text-align: left; overflow-wrap: anywhere; }
+.branch-list button:hover, .branch-list button.active { background: #eee; }
+.branch-list button[aria-selected='true'] { font-weight: 600; }
+.branch-status p { margin: 8px 0; font-size: 13px; }

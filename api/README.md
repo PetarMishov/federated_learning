@@ -287,8 +287,9 @@ at `refs/snapshots/<snapshot-id>`. See [Git storage](../docs/git-storage.md).
 {"token": "glpat-your-personal-access-token"}
 ```
 
-Create a GitLab personal access token with `read_user` and `read_repository`
-scopes. `read_api` can replace `read_user` if repository discovery is needed.
+Create a GitLab personal access token with `read_api` and `read_repository`
+scopes. `read_api` is required for branch discovery; older tokens with only
+`read_user` and `read_repository` must be replaced to load branches.
 No write permission is required. Existing broader scopes that provide the same
 read access are accepted; this connector makes only GET requests to GitLab.
 
@@ -346,7 +347,7 @@ is preserved; encryption and decryption are shared by the connectors. Credential
 are never returned to the browser. Requests only use GET and redirects are rejected.
 GitHub discovery uses `/user/repos`; GitLab uses
 `/api/v4/personal_access_tokens/self/associations` (GitLab 17.4+), which supports
-the existing read scopes without requiring additional API permissions. GitLab
+read token scopes. Branch discovery requires `read_api` on GitLab. GitLab
 requests include `min_access_level=20` (Reporter or higher) to limit discovery to
 repository read access and avoid expensive unfiltered public associations.
 Public projects without membership and roles below Reporter are excluded.
@@ -400,3 +401,24 @@ servers; credentials, query strings, fragments, and unrelated paths are rejected
 Restart the API after changing this setting.
 
 Reference: [GitHub Enterprise REST API base URL](https://docs.github.com/en/enterprise-server@3.19/rest/using-the-rest-api/getting-started-with-the-rest-api).
+
+## Branch selection
+
+`GET /connectors/{provider}/branches?repository=...&page=1` lists branches and
+current head commits using the authenticated user's saved provider token.
+For GitHub, `repository` is `owner/repo`; for GitLab, it is the numeric project ID.
+The response is `{"branches":[{"name":"main","commit_sha":"..."}],"has_more":false}`.
+Pages contain up to 100 branches. Local session validation, encrypted credential
+lookup, redirect rejection, API base URLs, and no-store responses match repository
+discovery. GitHub Enterprise paths retain `/api/v3/`.
+
+GitHub tokens need Contents read permission. GitLab tokens need `read_api` for
+`/projects/:id/repository/branches`; `read_repository` alone does not grant it.
+Repository access or token permission failures return `403`; provider failures
+return `502`. The project form offers searchable branch selection and defaults
+the editable commit SHA to the selected branch's head. Changing repository,
+provider, or branch resets the commit selection. Historical SHA selection is
+prepared for future import/deployment behavior; no deployment action is added.
+
+References: [GitLab branches API](https://docs.gitlab.com/api/branches/),
+[GitHub branches API](https://docs.github.com/en/rest/branches/branches#list-branches).

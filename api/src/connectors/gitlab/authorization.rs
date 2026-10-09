@@ -100,9 +100,7 @@ impl GitlabAuthorization {
         }
         let has = |scope: &str| details.scopes.iter().any(|granted| granted == scope);
         // Broader existing scopes are accepted, but no write scope is required.
-        if !(has("api")
-            || ((has("read_user") || has("read_api"))
-                && (has("read_repository") || has("write_repository"))))
+        if !(has("api") || (has("read_api") && (has("read_repository") || has("write_repository"))))
         {
             return Err(AuthorizationError::MissingReadPermissions);
         }
@@ -209,11 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn accepts_read_permissions_without_requiring_write_permissions() {
-        for scopes in [
-            vec!["read_user", "read_repository"],
-            vec!["read_api", "read_repository"],
-            vec!["api"],
-        ] {
+        for scopes in [vec!["read_api", "read_repository"], vec!["api"]] {
             let (service, task) = mock_provider(StatusCode::OK, scopes, true, false).await;
             let connection = service
                 .check_connection_authorization(12, "submitted-token")
@@ -255,6 +249,13 @@ mod tests {
                 true,
                 true,
                 AuthorizationError::InvalidToken,
+            ),
+            (
+                StatusCode::OK,
+                vec!["read_user", "read_repository"],
+                true,
+                false,
+                AuthorizationError::MissingReadPermissions,
             ),
             (
                 StatusCode::OK,

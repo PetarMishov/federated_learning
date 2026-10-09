@@ -78,7 +78,7 @@ fn api_error(error: AuthorizationError) -> ApiError {
         ),
         AuthorizationError::MissingReadPermissions => (
             StatusCode::BAD_REQUEST,
-            "GitLab token requires read_user and read_repository permissions, or equivalent read access.",
+            "GitLab token requires read_api and read_repository permissions, or equivalent read access.",
         ),
         AuthorizationError::ProviderUnavailable => {
             (StatusCode::BAD_GATEWAY, "Could not verify GitLab token.")

@@ -5,7 +5,7 @@
 <div class="connector-grid">
   <section class="connector-card" aria-labelledby="gitlab-heading">
     <h2 id="gitlab-heading">GitLab</h2>
-    <p>Add or replace your personal access token with <code>read_user</code> and <code>read_repository</code> permissions.</p>
+    <p>Add or replace your personal access token with <code>read_api</code> and <code>read_repository</code> permissions.</p>
     @if (connection(); as saved) {
       <p class="connection-status" role="status">Token saved. Connected as <strong>{{ saved.external_username }}</strong>.</p>
     }
