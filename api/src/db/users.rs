@@ -1,6 +1,6 @@
 use super::{
     auth,
-    types::{DBError, Organization, OrganizationList},
+    types::{Organization, OrganizationList},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -18,7 +18,7 @@ pub async fn verify_user_password(
     pool: &PgPool,
     username: &str,
     password: &str,
-) -> Result<Option<i64>, DBError> {
+) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
     let record = sqlx::query_as::<_, (i64, String)>(
         "SELECT id::bigint, password_hash FROM users WHERE username = $1",
     )
@@ -49,7 +49,7 @@ pub fn verify_user_token(
 pub async fn get_user_organizations(
     pool: &PgPool,
     user_id: i32,
-) -> Result<OrganizationList, DBError> {
+) -> Result<OrganizationList, sqlx::Error> {
     let rows = sqlx::query_as::<_, (i32, String, i32)>(
         "SELECT o.id, o.name, o.owner_user_id
          FROM organizations AS o

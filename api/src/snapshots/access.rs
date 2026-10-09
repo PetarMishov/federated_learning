@@ -11,14 +11,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-pub type SnapshotResponseError = (StatusCode, &'static str);
-
 pub async fn authorized_snapshot_commit(
     state: &AppState,
     project_id: i32,
     snapshot_id: i32,
     headers: HeaderMap,
-) -> Result<String, SnapshotResponseError> {
+) -> Result<String, (StatusCode, &'static str)> {
     let user_id = verify_user_credentials(headers, state).await?;
     let snapshot = get_snapshot(&state.pool, project_id, snapshot_id, user_id)
         .await
@@ -32,7 +30,7 @@ pub async fn authorized_snapshot_commit(
     Ok(snapshot.git_commit_sha)
 }
 
-pub fn snapshot_read_error(error: GitError) -> SnapshotResponseError {
+pub fn snapshot_read_error(error: GitError) -> (StatusCode, &'static str) {
     match error {
         GitError::InvalidInput(_) => (
             StatusCode::BAD_REQUEST,

@@ -1,7 +1,4 @@
-use super::{
-    access::SnapshotResponseError,
-    types::{MAX_SNAPSHOT_FILES, SaveSnapshotRequest},
-};
+use super::types::{MAX_SNAPSHOT_FILES, SaveSnapshotRequest};
 use crate::{
     db::{snapshots, types::Snapshot},
     git::{GitError, GitSnapshotFile},
@@ -11,11 +8,11 @@ use axum::http::StatusCode;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 const SNAPSHOT_CREATION_LOCK: i32 = 0x464c534e;
-const SAVE_FAILED: SnapshotResponseError = (
+const SAVE_FAILED: (StatusCode, &'static str) = (
     StatusCode::INTERNAL_SERVER_ERROR,
     "Could not save snapshot.",
 );
-const NO_ACCESS: SnapshotResponseError = (
+const NO_ACCESS: (StatusCode, &'static str) = (
     StatusCode::NOT_FOUND,
     "Project not found or editing is not allowed.",
 );
@@ -25,7 +22,7 @@ pub async fn save_snapshot(
     project_id: i32,
     user_id: i32,
     request: SaveSnapshotRequest,
-) -> Result<Snapshot, SnapshotResponseError> {
+) -> Result<Snapshot, (StatusCode, &'static str)> {
     if !snapshots::can_save_snapshot(&state.pool, project_id, user_id)
         .await
         .map_err(|_| SAVE_FAILED)?
@@ -105,7 +102,7 @@ pub async fn save_snapshot(
 
 fn decode_files(
     request: SaveSnapshotRequest,
-) -> Result<Vec<GitSnapshotFile>, SnapshotResponseError> {
+) -> Result<Vec<GitSnapshotFile>, (StatusCode, &'static str)> {
     if request.files.len() > MAX_SNAPSHOT_FILES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,

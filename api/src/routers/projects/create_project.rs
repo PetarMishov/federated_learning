@@ -1,9 +1,6 @@
 use crate::{
     auth::verify_user_credentials,
-    db::{
-        projects,
-        types::{DBError, Project},
-    },
+    db::{projects, types::Project},
     routers::types::CreateNameRequest,
     state::AppState,
 };
@@ -44,7 +41,7 @@ async fn create_project_with_repository(
     org_id: i32,
     user_id: i32,
     name: &str,
-) -> Result<Option<Project>, DBError> {
+) -> Result<Option<Project>, Box<dyn std::error::Error + Send + Sync>> {
     let mut transaction = state.pool.begin().await?;
     let Some(project) = projects::create_project(&mut *transaction, org_id, user_id, name).await?
     else {

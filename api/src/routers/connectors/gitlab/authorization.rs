@@ -14,8 +14,6 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-type ApiError = (StatusCode, &'static str);
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthorizationRequest {
@@ -23,7 +21,7 @@ pub struct AuthorizationRequest {
 }
 
 impl AuthorizationRequest {
-    fn validated_token(&self) -> Result<&str, ApiError> {
+    fn validated_token(&self) -> Result<&str, (StatusCode, &'static str)> {
         let token = self.token.trim();
         if token.is_empty()
             || token.len() > 4096
@@ -43,7 +41,7 @@ pub async fn authorize_request(
     Extension(gitlab): Extension<Option<Arc<GitlabAuthorization>>>,
     headers: HeaderMap,
     Json(request): Json<AuthorizationRequest>,
-) -> Result<(HeaderMap, Json<ConnectionResponse>), ApiError> {
+) -> Result<(HeaderMap, Json<ConnectionResponse>), (StatusCode, &'static str)> {
     let (user_id, claims) = authenticated_claims(headers, &state).await?;
     let token = request.validated_token()?;
     let gitlab = gitlab.ok_or((
@@ -70,7 +68,7 @@ pub async fn authorize_request(
     Ok((headers, Json(connection.response)))
 }
 
-fn api_error(error: AuthorizationError) -> ApiError {
+fn api_error(error: AuthorizationError) -> (StatusCode, &'static str) {
     match error {
         AuthorizationError::InvalidToken => (
             StatusCode::BAD_REQUEST,

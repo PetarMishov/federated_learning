@@ -1,11 +1,11 @@
-use super::types::{DBError, Snapshot, SnapshotList};
+use super::types::{Snapshot, SnapshotList};
 use sqlx::{FromRow, PgPool, Row};
 
 pub async fn can_save_snapshot(
     pool: &PgPool,
     project_id: i32,
     user_id: i32,
-) -> Result<bool, DBError> {
+) -> Result<bool, sqlx::Error> {
     Ok(
         sqlx::query_scalar("SELECT has_project_permission($1, $2, 'edit_project')")
             .bind(user_id)
@@ -20,7 +20,7 @@ pub async fn create_snapshot<'a>(
     project_id: i32,
     user_id: i32,
     git_commit_sha: &str,
-) -> Result<Option<Snapshot>, DBError> {
+) -> Result<Option<Snapshot>, sqlx::Error> {
     // Recheck editing rights at publication, retaining the authorization rows
     // until commit so membership, ownership, and grants cannot change mid-save.
     Ok(sqlx::query_as::<_, Snapshot>(
@@ -55,7 +55,7 @@ pub async fn snapshot_was_saved<'a>(
     project_id: i32,
     snapshot_id: i32,
     git_commit_sha: &str,
-) -> Result<bool, DBError> {
+) -> Result<bool, sqlx::Error> {
     // Internal reconciliation only; HTTP reads must use get_snapshot instead.
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM snapshots WHERE project_id = $1 AND id = $2 AND git_commit_sha = $3)",
@@ -73,7 +73,7 @@ pub async fn get_snapshots(
     user_id: i32,
     limit: u32,
     offset: u32,
-) -> Result<Option<SnapshotList>, DBError> {
+) -> Result<Option<SnapshotList>, sqlx::Error> {
     // The left join distinguishes an authorized empty project from no access,
     // while keeping authorization and snapshot selection in one statement.
     let rows = sqlx::query(
@@ -124,7 +124,7 @@ pub async fn get_snapshot(
     project_id: i32,
     snapshot_id: i32,
     user_id: i32,
-) -> Result<Option<Snapshot>, DBError> {
+) -> Result<Option<Snapshot>, sqlx::Error> {
     // Check snapshot ownership and current project access in the same query.
     // Organization membership alone does not grant access to project files.
     Ok(sqlx::query_as::<_, Snapshot>(

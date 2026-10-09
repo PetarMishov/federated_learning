@@ -1,11 +1,11 @@
-use super::types::{DBError, Deployment, DeploymentList, Member, MemberList, Project};
+use super::types::{Deployment, DeploymentList, Member, MemberList, Project};
 use sqlx::PgPool;
 
 pub async fn get_project_members(
     pool: &PgPool,
     proj_id: i32,
     user_id: i32,
-) -> Result<MemberList, DBError> {
+) -> Result<MemberList, sqlx::Error> {
     // Authorize the reader and select current project members in one statement.
     // EXISTS avoids duplicate users when their role has several project grants.
     let rows = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>)>(
@@ -46,7 +46,7 @@ pub async fn create_project<'a>(
     org_id: i32,
     user_id: i32,
     name: &str,
-) -> Result<Option<Project>, DBError> {
+) -> Result<Option<Project>, sqlx::Error> {
     // Lock authorization rows until insertion finishes, so membership and
     // ownership cannot change between permission checking and creation.
     let row = sqlx::query_as::<_, (i32, i32, i32, String)>(
@@ -78,7 +78,7 @@ pub async fn get_project_deployments(
     pool: &PgPool,
     proj_id: i32,
     user_id: i32,
-) -> Result<DeploymentList, DBError> {
+) -> Result<DeploymentList, sqlx::Error> {
     // Read deployments and check current organization membership in one statement.
     let deployments = sqlx::query_as::<_, Deployment>(
         "SELECT d.id, d.org_id, d.project_id, d.snapshot_id, d.name,

@@ -1,11 +1,11 @@
-use super::types::{DBError, Member, MemberList, Organization, Project, ProjectList};
+use super::types::{Member, MemberList, Organization, Project, ProjectList};
 use sqlx::PgPool;
 
 pub async fn create_organization(
     pool: &PgPool,
     user_id: i32,
     name: &str,
-) -> Result<Organization, DBError> {
+) -> Result<Organization, sqlx::Error> {
     // Ownership requires membership; the deferred FK is checked at commit.
     let mut transaction = pool.begin().await?;
     let (id, name, owner_user_id) = sqlx::query_as::<_, (i32, String, i32)>(
@@ -33,7 +33,7 @@ pub async fn get_organization_members(
     pool: &PgPool,
     org_id: i32,
     user_id: i32,
-) -> Result<MemberList, DBError> {
+) -> Result<MemberList, sqlx::Error> {
     // Verify the caller's membership within the same statement that reads members.
     let rows = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>)>(
         "SELECT u.id, u.username, m.role_id, r.name
@@ -66,7 +66,7 @@ pub async fn get_organization_projects(
     pool: &PgPool,
     org_id: i32,
     user_id: i32,
-) -> Result<ProjectList, DBError> {
+) -> Result<ProjectList, sqlx::Error> {
     // Check membership and read projects from the same database snapshot.
     let rows = sqlx::query_as::<_, (i32, i32, i32, String)>(
         "SELECT p.id, p.org_id, p.created_by_user_id, p.name

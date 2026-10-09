@@ -1,11 +1,11 @@
 use sqlx::PgPool;
 
-use crate::db::types::{DBError, Notification, NotificationList};
+use crate::db::types::{Notification, NotificationList};
 
 pub async fn get_user_notifications(
     pool: &PgPool,
     user_id: i32,
-) -> Result<NotificationList, DBError> {
+) -> Result<NotificationList, sqlx::Error> {
     let rows = sqlx::query_as::<_, (i32, String, String, bool, f64)>(
         "SELECT n.id, n.title, n.message, n.read_at IS NOT NULL AS is_read,
                 (EXTRACT(EPOCH FROM n.created_at) * 1000)::double precision AS created_at
@@ -31,7 +31,7 @@ pub async fn get_user_notifications(
     })
 }
 
-pub async fn read_user_notifications(pool: &PgPool, user_id: i32) -> Result<(), DBError> {
+pub async fn read_user_notifications(pool: &PgPool, user_id: i32) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE notifications
          SET read_at = CURRENT_TIMESTAMP
