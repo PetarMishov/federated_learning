@@ -27,12 +27,28 @@ async fn serve_with_git(
         .merge(organizations_router())
         .merge(projects_router())
         .merge(users_router())
+        .layer(axum::Extension(
+            None::<std::sync::Arc<crate::connectors::repositories::RepositoryClient>>,
+        ))
         .with_state(AppState {
             pool,
             encoding_key: EncodingKey::from_secret(SECRET),
             decoding_key: DecodingKey::from_secret(SECRET),
-            git,
+            git: git.clone(),
         });
+    let app = if git.repository_root().is_dir() {
+        let imports = crate::imports::ImportManager::new(
+            &git,
+            crate::imports::ImportLimits {
+                max_bytes: 1024,
+                max_files: 3,
+            },
+        )
+        .unwrap();
+        app.layer(axum::Extension(imports))
+    } else {
+        app
+    };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -188,6 +204,7 @@ async fn creation_endpoints_persist_membership_and_enforce_project_ownership() {
         check_project_members(address, &check_pool).await;
         check_snapshots(address, &check_pool, &git).await;
         check_save_snapshots(address, &check_pool, &git).await;
+        check_imports(address, &check_pool, &git).await;
     })
     .await;
     server.abort();
@@ -1679,4 +1696,238 @@ async fn check_snapshots(address: SocketAddr, pool: &PgPool, git: &crate::git::G
             .0,
         401
     );
+}
+
+async fn check_imports(address: SocketAddr, pool: &PgPool, git: &crate::git::GitClient) {
+    let owner: i32 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash) VALUES ('import-owner','unused') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let org = crate::db::organizations::create_organization(pool, owner, "Import fixture")
+        .await
+        .unwrap();
+    let bearer = token(owner);
+    let (_, body) = request(
+        address,
+        "POST",
+        &format!("/organizations/{}/projects", org.id),
+        json!({"name":"Import target"}),
+        Some(&bearer),
+    )
+    .await;
+    let project = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_i64()
+        .unwrap() as i32;
+    let root = format!("/projects/{project}/imports");
+    let (_, body) = request(
+        address,
+        "POST",
+        &root,
+        json!({"source":"local"}),
+        Some(&bearer),
+    )
+    .await;
+    let id = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let draft = format!("{root}/{id}");
+    assert_eq!(
+        request(address, "GET", &draft, Value::Null, None).await.0,
+        401
+    );
+    assert_eq!(
+        request(
+            address,
+            "GET",
+            &format!("/projects/2147483647/imports/{id}"),
+            Value::Null,
+            Some(&bearer)
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(
+        request(
+            address,
+            "POST",
+            &format!("{draft}/snapshot"),
+            json!({"files":[]}),
+            Some(&bearer)
+        )
+        .await
+        .0,
+        409
+    );
+    assert!(git.list_snapshot_refs(project).await.unwrap().is_empty());
+    let client = reqwest::Client::new();
+    let multipart = |path: &str, content: &str| {
+        format!(
+            "--boundary\r\nContent-Disposition: form-data; name=\"{path}\"; filename=\"file\"\r\nContent-Type: application/octet-stream\r\n\r\n{content}\r\n--boundary--\r\n"
+        )
+    };
+    let response = client
+        .post(format!("http://{address}{draft}/files"))
+        .bearer_auth(&bearer)
+        .header("Content-Type", "multipart/form-data; boundary=boundary")
+        .body(multipart("src%2Fspace%20name.txt", "hello"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202, "{}", response.text().await.unwrap());
+    let mut ready = false;
+    for _ in 0..100 {
+        let (_, body) = request(address, "GET", &draft, Value::Null, Some(&bearer)).await;
+        let status: Value = serde_json::from_str(&body).unwrap();
+        assert_ne!(status["phase"], "failed", "{status}");
+        if status["phase"] == "ready" {
+            assert_eq!(status["bytes"], 5);
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(ready);
+    assert!(git.list_snapshot_refs(project).await.unwrap().is_empty());
+    let (status, body) = request(
+        address,
+        "GET",
+        &format!("{draft}/file?path=src%2Fspace%20name.txt"),
+        Value::Null,
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["content"],
+        "hello"
+    );
+    // No edited files are required to publish an imported draft.
+    let (status, body) = request(
+        address,
+        "POST",
+        &format!("{draft}/snapshot"),
+        json!({"files":[]}),
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let saved: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(saved["source"], "local");
+    assert_eq!(
+        git.snapshot_file(
+            project,
+            saved["git_commit_sha"].as_str().unwrap(),
+            "src/space name.txt"
+        )
+        .await
+        .unwrap()
+        .content,
+        "hello"
+    );
+    assert_eq!(
+        request(address, "GET", &draft, Value::Null, Some(&bearer))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(git.list_snapshot_refs(project).await.unwrap().len(), 1);
+    // Provider provenance stays separate from the parentless stored commit.
+    let limits = crate::imports::ImportLimits {
+        max_bytes: 1024,
+        max_files: 3,
+    };
+    let manager = crate::imports::ImportManager::new(git, limits).unwrap();
+    let imported = manager
+        .create(
+            project,
+            owner,
+            "gitlab".into(),
+            Some("main".into()),
+            Some("a".repeat(40)),
+        )
+        .await
+        .unwrap();
+    let commit = imported
+        .git
+        .capture_snapshot(
+            project,
+            vec![crate::git::GitSnapshotFile {
+                path: "run.sh".into(),
+                content: b"run".to_vec(),
+                executable: true,
+            }],
+        )
+        .await
+        .unwrap();
+    imported
+        .git
+        .retain_snapshot(project, "draft", &commit)
+        .await
+        .unwrap();
+    *imported.commit.lock().unwrap() = Some(commit);
+    imported.update(crate::imports::ImportPhase::Ready, Some(100), 3, 1);
+    let state = AppState {
+        pool: pool.clone(),
+        git: git.clone(),
+        encoding_key: EncodingKey::from_secret(SECRET),
+        decoding_key: DecodingKey::from_secret(SECRET),
+    };
+    let published = crate::snapshots::save::save_import(
+        &state,
+        &imported,
+        serde_json::from_value(json!({"files":[]})).unwrap(),
+        limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(published.source, "gitlab");
+    assert_eq!(published.source_branch.as_deref(), Some("main"));
+    assert_eq!(
+        published.source_commit_sha.as_deref(),
+        Some("a".repeat(40).as_str())
+    );
+    assert_ne!(
+        published.git_commit_sha,
+        published.source_commit_sha.clone().unwrap()
+    );
+    manager.remove(imported.status().id, project, owner);
+    // Reject oversize and traversal before they can become ready drafts/snapshots.
+    for (name, content, expected) in [
+        ("large", "x".repeat(1025), 413),
+        ("..%2Fescape", "bad".into(), 400),
+    ] {
+        let (_, body) = request(
+            address,
+            "POST",
+            &root,
+            json!({"source":"local"}),
+            Some(&bearer),
+        )
+        .await;
+        let id = serde_json::from_str::<Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let path = format!("{root}/{id}");
+        let response = client
+            .post(format!("http://{address}{path}/files"))
+            .bearer_auth(&bearer)
+            .header("Content-Type", "multipart/form-data; boundary=boundary")
+            .body(multipart(name, &content))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), expected);
+        assert_eq!(
+            request(address, "DELETE", &path, Value::Null, Some(&bearer))
+                .await
+                .0,
+            204
+        );
+    }
+    assert_eq!(git.list_snapshot_refs(project).await.unwrap().len(), 2);
 }

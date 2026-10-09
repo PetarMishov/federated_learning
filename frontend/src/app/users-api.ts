@@ -132,6 +132,20 @@ export interface BranchList {
   has_more: boolean;
 }
 
+export interface ImportStatus {
+  id: string;
+  phase: 'uploading' | 'downloading' | 'preparing' | 'ready' | 'failed' | 'cancelled';
+  progress_percent: number | null;
+  bytes: number;
+  files: number;
+  error: string | null;
+}
+
+export interface ImportLimits {
+  max_bytes: number;
+  max_files: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class UsersApi {
   private readonly http = inject(HttpClient);
@@ -202,6 +216,63 @@ export class UsersApi {
     return this.http.get<BranchList>(`/connectors/${provider}/branches`, {
       headers: { Authorization: `Bearer ${this.token()}` },
       params: { repository: provider === 'github' ? repository.full_name : String(repository.id), page },
+    });
+  }
+
+  getImportLimits(projectId: number) {
+    return this.http.get<ImportLimits>(`/projects/${projectId}/import-limits`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  createImport(projectId: number, source: 'github' | 'gitlab' | 'local', repository?: string, branch?: string, commit_sha?: string) {
+    return this.http.post<ImportStatus>(`/projects/${projectId}/imports`, { source, repository, branch, commit_sha }, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  uploadImport(projectId: number, importId: string, files: { path: string; file: File }[]) {
+    const body = new FormData();
+    for (const entry of files) body.append(encodeURIComponent(entry.path), entry.file, entry.file.name);
+    return this.http.post<ImportStatus>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}/files`, body, {
+      headers: { Authorization: `Bearer ${this.token()}` }, reportProgress: true, observe: 'events',
+    });
+  }
+
+  getImport(projectId: number, importId: string) {
+    return this.http.get<ImportStatus>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  discardImport(projectId: number, importId: string) {
+    return this.http.delete<void>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}`, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
+  discardImportOnExit(projectId: number, importId: string) {
+    // Ordinary XHRs may be aborted during refresh or a full-page navigation.
+    void fetch(`/projects/${projectId}/imports/${encodeURIComponent(importId)}`, {
+      method: 'DELETE', keepalive: true, headers: { Authorization: `Bearer ${this.token()}` },
+    }).catch(() => {});
+  }
+
+  getImportTree(projectId: number, importId: string, path = '') {
+    return this.http.get<SnapshotTree>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}/tree`, {
+      headers: { Authorization: `Bearer ${this.token()}` }, params: { path },
+    });
+  }
+
+  getImportFile(projectId: number, importId: string, path: string) {
+    return this.http.get<SnapshotFile>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}/file`, {
+      headers: { Authorization: `Bearer ${this.token()}` }, params: { path },
+    });
+  }
+
+  saveImportSnapshot(projectId: number, importId: string, files: { path: string; content: string }[], operations: SnapshotOperation[]) {
+    return this.http.post<Snapshot>(`/projects/${projectId}/imports/${encodeURIComponent(importId)}/snapshot`, { files, operations }, {
+      headers: { Authorization: `Bearer ${this.token()}` },
     });
   }
 

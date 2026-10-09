@@ -21,9 +21,30 @@ pub async fn create_snapshot<'a>(
     user_id: i32,
     git_commit_sha: &str,
 ) -> Result<Option<Snapshot>, sqlx::Error> {
+    create_imported_snapshot(
+        executor,
+        project_id,
+        user_id,
+        git_commit_sha,
+        "local",
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn create_imported_snapshot<'a>(
+    executor: impl sqlx::PgExecutor<'a>,
+    project_id: i32,
+    user_id: i32,
+    git_commit_sha: &str,
+    source: &str,
+    branch: Option<&str>,
+    source_commit: Option<&str>,
+) -> Result<Option<Snapshot>, sqlx::Error> {
     // Recheck editing rights at publication, retaining the authorization rows
     // until commit so membership, ownership, and grants cannot change mid-save.
-    Ok(sqlx::query_as::<_, Snapshot>(
+    sqlx::query_as::<_, Snapshot>(
         "WITH authorized_project AS (
              SELECT p.id FROM projects p
              JOIN organizations o ON o.id = p.org_id
@@ -37,8 +58,8 @@ pub async fn create_snapshot<'a>(
              ))
              FOR SHARE OF p, o, caller
          )
-         INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha, created_at)
-         SELECT id, $2, 'local', $3, clock_timestamp() FROM authorized_project
+         INSERT INTO snapshots (project_id, created_by_user_id, source, git_commit_sha, source_branch, source_commit_sha, created_at)
+         SELECT id, $2, $4::text::snapshot_source, $3, $5, $6, clock_timestamp() FROM authorized_project
          RETURNING id, project_id, created_by_user_id, source::text AS source,
                    source_branch, source_commit_sha, git_commit_sha,
                    (EXTRACT(EPOCH FROM created_at) * 1000)::double precision AS created_at",
@@ -46,8 +67,9 @@ pub async fn create_snapshot<'a>(
     .bind(project_id)
     .bind(user_id)
     .bind(git_commit_sha)
+    .bind(source).bind(branch).bind(source_commit)
     .fetch_optional(executor)
-    .await?)
+    .await
 }
 
 pub async fn snapshot_was_saved<'a>(

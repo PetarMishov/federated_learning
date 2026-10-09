@@ -165,7 +165,7 @@ impl GitClient {
         &self.repository_root
     }
 
-    fn repository_path(&self, project_id: i32) -> Result<PathBuf, GitError> {
+    pub(crate) fn repository_path(&self, project_id: i32) -> Result<PathBuf, GitError> {
         validate_project_id(project_id)?;
         let repository = self.repository_root.join(format!("{project_id}.git"));
         reject_symlinks(&repository)?;
@@ -454,6 +454,19 @@ impl GitClient {
     ) -> Result<(), GitError> {
         validate_snapshot_reference(snapshot_id, commit_sha)?;
         reject_symlinks(source)?;
+        self.import_commit(project_id, source, commit_sha).await?;
+        self.retain_snapshot(project_id, snapshot_id, commit_sha)
+            .await
+    }
+
+    pub(crate) async fn import_commit(
+        &self,
+        project_id: i32,
+        source: &Path,
+        commit_sha: &str,
+    ) -> Result<(), GitError> {
+        validate_object_sha(commit_sha)?;
+        reject_symlinks(source)?;
         let source = source.canonicalize()?;
         let repository = self.repository_path(project_id)?;
         let mut fetch = self.command();
@@ -464,8 +477,79 @@ impl GitClient {
             .arg(source)
             .arg(commit_sha);
         run(fetch).await?;
-        self.retain_snapshot(project_id, snapshot_id, commit_sha)
-            .await
+        Ok(())
+    }
+
+    pub(crate) async fn import_tree_commit(
+        &self,
+        project_id: i32,
+        sha: &str,
+    ) -> Result<String, GitError> {
+        let tree = self.directory_oid(project_id, sha, "").await?;
+        let mut command = self.command();
+        command
+            .arg("--git-dir")
+            .arg(self.repository_path(project_id)?)
+            .args(["commit-tree", &tree])
+            .env("GIT_AUTHOR_NAME", "Snapshot storage")
+            .env("GIT_AUTHOR_EMAIL", "snapshots@localhost")
+            .env("GIT_COMMITTER_NAME", "Snapshot storage")
+            .env("GIT_COMMITTER_EMAIL", "snapshots@localhost");
+        parse_object_sha(run_with_input(command, b"Imported project draft\n").await?)
+    }
+
+    /// Validate an imported tree before exposing it as an editable draft.
+    pub(crate) async fn inspect_import(
+        &self,
+        project_id: i32,
+        commit: &str,
+        max_bytes: u64,
+        max_files: usize,
+    ) -> Result<(u64, usize), GitError> {
+        validate_object_sha(commit)?;
+        let output = self
+            .object_command(project_id, &["ls-tree", "-r", "-l", "-z", commit])
+            .await?;
+        let mut bytes = 0u64;
+        let mut files = 0usize;
+        for record in output
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            let record = std::str::from_utf8(record)
+                .map_err(|_| GitError::InvalidData("Invalid imported filename"))?;
+            let (metadata, path) = record
+                .split_once('\t')
+                .ok_or(GitError::InvalidData("Invalid imported tree"))?;
+            let fields = metadata.split_whitespace().collect::<Vec<_>>();
+            if fields.len() != 4 {
+                return Err(GitError::InvalidData("Invalid imported tree"));
+            }
+            if fields[0] == "160000" {
+                return Err(GitError::InvalidInput(
+                    "Repositories containing submodules cannot be loaded. Include the code in the selected repository.",
+                ));
+            }
+            validate_import_path(path)?;
+            let size = fields[3]
+                .parse::<u64>()
+                .map_err(|_| GitError::InvalidData("Invalid imported object size"))?;
+            bytes = bytes.checked_add(size).ok_or(GitError::InvalidInput(
+                "Project exceeds the import size limit.",
+            ))?;
+            files += 1;
+            if bytes > max_bytes {
+                return Err(GitError::InvalidInput(
+                    "Project exceeds the import size limit.",
+                ));
+            }
+            if files > max_files {
+                return Err(GitError::InvalidInput(
+                    "Project exceeds the import file limit.",
+                ));
+            }
+        }
+        Ok((bytes, files))
     }
 
     /// Retain a commit already captured in this project's repository.
@@ -626,7 +710,6 @@ impl GitClient {
                 file.executable = mode == "100755";
             }
         }
-        let repository = self.repository_path(project_id)?;
         if self
             .object_command(project_id, &["rev-parse", "--is-bare-repository"])
             .await?
@@ -676,6 +759,43 @@ impl GitClient {
         })
         .await
         .map_err(|_| GitError::InvalidData("Snapshot capture task failed"))??;
+        self.commit_staged_files(project_id, base, &capture.0, &names)
+            .await
+    }
+
+    /// Hash numbered private staging files without loading their contents in memory.
+    pub(crate) async fn capture_staged_files(
+        &self,
+        project_id: i32,
+        directory: &Path,
+        names: &[(String, bool)],
+    ) -> Result<String, GitError> {
+        let metadata = names
+            .iter()
+            .map(|(path, executable)| GitSnapshotFile {
+                path: path.clone(),
+                content: vec![],
+                executable: *executable,
+            })
+            .collect::<Vec<_>>();
+        validate_upload_paths(&metadata)?;
+        self.commit_staged_files(
+            project_id,
+            std::collections::BTreeMap::new(),
+            directory,
+            names,
+        )
+        .await
+    }
+
+    async fn commit_staged_files(
+        &self,
+        project_id: i32,
+        base: std::collections::BTreeMap<String, (String, String)>,
+        directory: &Path,
+        names: &[(String, bool)],
+    ) -> Result<String, GitError> {
+        let repository = self.repository_path(project_id)?;
         let mut index_info = Vec::new();
         for (path, (mode, oid)) in base {
             index_info.extend_from_slice(format!("{mode} {oid}\t{path}\0").as_bytes());
@@ -691,7 +811,7 @@ impl GitClient {
                 "--",
             ]);
             for index in 0..chunk.len() {
-                hash.arg(capture.0.join((batch * 128 + index).to_string()));
+                hash.arg(directory.join((batch * 128 + index).to_string()));
             }
             let hashes = run(hash).await?;
             let hashes = std::str::from_utf8(&hashes)
@@ -710,7 +830,7 @@ impl GitClient {
                 index_info.push(0);
             }
         }
-        let index = capture.0.join("index");
+        let index = directory.join("index");
         let mut empty = self.command();
         empty
             .arg("--git-dir")
@@ -744,7 +864,7 @@ impl GitClient {
         parse_object_sha(run_with_input(commit, b"Saved snapshot\n").await?)
     }
 
-    fn command(&self) -> Command {
+    pub(crate) fn command(&self) -> Command {
         let mut command = Command::new("git");
         for (name, _) in std::env::vars_os() {
             if name.to_string_lossy().starts_with("GIT_") {
@@ -808,6 +928,14 @@ fn validate_snapshot_reference(snapshot_id: &str, commit_sha: &str) -> Result<()
         return Err(GitError::InvalidInput("Invalid snapshot ID or commit SHA"));
     }
     Ok(())
+}
+
+pub(crate) fn validate_import_path(path: &str) -> Result<(), GitError> {
+    validate_upload_paths(&[GitSnapshotFile {
+        path: path.into(),
+        content: vec![],
+        executable: false,
+    }])
 }
 
 fn validate_upload_paths(files: &[GitSnapshotFile]) -> Result<(), GitError> {
@@ -931,6 +1059,161 @@ fn path_contains(parent: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn staged_import_supports_100_mib_and_enforces_content_and_file_limits() {
+        use std::io::Write;
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let staging = fixture.0.join("upload");
+        std::fs::create_dir(&staging).unwrap();
+        let mut file = std::fs::File::create(staging.join("0")).unwrap();
+        let mut state = 0x123456789abcdef_u64;
+        let chunk = (0..1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..100 {
+            file.write_all(&chunk).unwrap();
+        }
+        drop(file);
+        let started = std::time::Instant::now();
+        let commit = client
+            .capture_staged_files(42, &staging, &[("data.bin".into(), false)])
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .inspect_import(42, &commit, 100 * 1024 * 1024, 1)
+                .await
+                .unwrap(),
+            (100 * 1024 * 1024, 1)
+        );
+        assert!(matches!(
+            client
+                .inspect_import(42, &commit, 100 * 1024 * 1024 - 1, 1)
+                .await,
+            Err(GitError::InvalidInput(_))
+        ));
+        let saved = client
+            .capture_snapshot_patch(42, Some(&commit), vec![], vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            client.directory_oid(42, &commit, "").await.unwrap(),
+            client.directory_oid(42, &saved, "").await.unwrap()
+        );
+        assert!(matches!(
+            client.snapshot_file(42, &saved, "data.bin").await,
+            Err(GitError::FileTooLarge { .. })
+        ));
+        eprintln!(
+            "100 MiB staging, validation and unedited save: {:?}",
+            started.elapsed()
+        );
+        std::fs::write(staging.join("1"), b"small").unwrap();
+        let commit = client
+            .capture_staged_files(
+                42,
+                &staging,
+                &[("data.bin".into(), false), ("small".into(), true)],
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            client.inspect_import(42, &commit, u64::MAX, 1).await,
+            Err(GitError::InvalidInput(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_import_keeps_exact_blobs_and_links_rejects_submodules_and_detaches_history() {
+        let fixture = Fixture::new();
+        let client = GitClient::configured(fixture.0.join("storage/git")).unwrap();
+        client.create_project_repository(42).await.unwrap();
+        let source = client
+            .capture_snapshot(
+                42,
+                vec![GitSnapshotFile {
+                    path: "keep.txt".into(),
+                    content: b"$Format:%H$".to_vec(),
+                    executable: true,
+                }],
+            )
+            .await
+            .unwrap();
+        let repository = client.repository_path(42).unwrap();
+        let blob = client
+            .object_command(42, &["rev-parse", &format!("{source}:keep.txt")])
+            .await
+            .unwrap();
+        let blob = String::from_utf8(blob).unwrap();
+        let mut command = client.command();
+        command.arg("--git-dir").arg(&repository).arg("mktree");
+        let tree = parse_object_sha(
+            run_with_input(
+                command,
+                format!(
+                    "100755 blob {}\tkeep.txt\n120000 blob {}\tlink\n",
+                    blob.trim(),
+                    blob.trim()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        let mut command = client.command();
+        command
+            .arg("--git-dir")
+            .arg(&repository)
+            .args(["commit-tree", &tree, "-p", &source])
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@localhost")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@localhost");
+        let revision =
+            parse_object_sha(run_with_input(command, b"provider\n").await.unwrap()).unwrap();
+        assert_eq!(
+            client
+                .inspect_import(42, &revision, 1024, 10)
+                .await
+                .unwrap(),
+            (22, 2)
+        );
+        let imported = client.import_tree_commit(42, &revision).await.unwrap();
+        assert_eq!(
+            client
+                .object_command(42, &["rev-list", "--count", &imported])
+                .await
+                .unwrap(),
+            b"1\n"
+        );
+        assert_eq!(
+            client.directory_oid(42, &revision, "").await.unwrap(),
+            client.directory_oid(42, &imported, "").await.unwrap()
+        );
+        let mut command = client.command();
+        command.arg("--git-dir").arg(&repository).arg("mktree");
+        let tree = parse_object_sha(
+            run_with_input(
+                command,
+                format!("160000 commit {source}\tsubmodule\n").as_bytes(),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(client.inspect_import(42, &tree, 1024, 10).await, Err(GitError::InvalidInput(message)) if message.contains("submodules"))
+        );
+    }
 
     #[tokio::test]
     async fn tree_operations_move_binary_subtrees_preserve_modes_and_keep_old_snapshots() {

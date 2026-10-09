@@ -54,6 +54,122 @@ describe('Project sidebars', () => {
     return fixture;
   }
 
+  it('shows a read-only folder name and preserves selection on cancellation', async () => {
+    const fixture = TestBed.createComponent(ProjectPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    snapshotListRequest().flush({ snapshots: [], has_more: false });
+    http.expectOne('/projects/7/deployments').flush({ deployments: [] });
+    fixture.nativeElement.querySelector('.snapshot-sources button:nth-child(3)').click();
+    await fixture.whenStable();
+    const path = fixture.nativeElement.querySelector('#snapshot-path');
+    expect(path.readOnly).toBe(true);
+    const picker = fixture.nativeElement.querySelector('input[type="file"]');
+    expect(picker.hasAttribute('webkitdirectory')).toBe(true);
+    expect(picker.hidden).toBe(true);
+    const openDialog = vi.spyOn(picker, 'click').mockImplementation(() => {});
+    fixture.nativeElement.querySelector('.browse-folder').click();
+    expect(openDialog).toHaveBeenCalledOnce();
+    const file = new File(['print("hello")'], 'train.py', { type: 'text/plain' });
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'Training/src/train.py' });
+    Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
+    picker.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+    expect(path.value).toBe('Training');
+    expect(path.title).toContain('browser');
+    Object.defineProperty(picker, 'files', { configurable: true, value: [] });
+    picker.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+    expect(path.value).toBe('Training');
+    http.expectNone(req => req.method === 'POST');
+  });
+
+  async function startLocalLoad() {
+    const fixture = TestBed.createComponent(ProjectPage);
+    fixture.detectChanges();
+    const http = TestBed.inject(HttpTestingController);
+    snapshotListRequest().flush({ snapshots: [], has_more: false });
+    http.expectOne('/projects/7/deployments').flush({ deployments: [] });
+    fixture.nativeElement.querySelector('.snapshot-sources button:nth-child(3)').click();
+    await fixture.whenStable();
+    const picker = fixture.nativeElement.querySelector('input[type="file"]');
+    const file = new File(['hello'], 'README.md');
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'Training/README.md' });
+    Object.defineProperty(picker, 'files', { value: [file] });
+    picker.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('.load-project').click();
+    http.expectOne('/projects/7/import-limits').flush({ max_bytes: 104857600, max_files: 10000 });
+    await fixture.whenStable();
+    const created = http.expectOne({ method: 'POST', url: '/projects/7/imports' });
+    expect(created.request.body).toEqual({ source: 'local', repository: undefined, branch: undefined, commit_sha: undefined });
+    created.flush({ id: 'draft-id', phase: 'uploading', progress_percent: null, bytes: 0, files: 0, error: null });
+    return fixture;
+  }
+
+  it('streams a selected folder, opens an unsaved draft lazily, and saves without edits', async () => {
+    const fixture = await startLocalLoad();
+    const http = TestBed.inject(HttpTestingController);
+    const upload = http.expectOne('/projects/7/imports/draft-id/files');
+    expect(upload.request.body).toBeInstanceOf(FormData);
+    expect([...upload.request.body.keys()]).toEqual(['README.md']);
+    expect(upload.request.reportProgress).toBe(true);
+    upload.flush({ id: 'draft-id', phase: 'ready', progress_percent: 100, bytes: 5, files: 1, error: null });
+    http.expectOne(req => req.url === '/projects/7/imports/draft-id/tree').flush({ path: '', entries: [{name: 'README.md', path: 'README.md', kind: 'file'}] });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.textContent).toContain('Unsaved draft');
+    http.expectNone(req => req.url.endsWith('/snapshot'));
+    fixture.nativeElement.querySelector('.snapshot-picker-header button').click();
+    const save = http.expectOne('/projects/7/imports/draft-id/snapshot');
+    expect(save.request.body).toEqual({ files: [], operations: [] });
+    save.flush({ ...savedSnapshot, id: 6 });
+    http.expectOne('/projects/7/snapshots/6').flush({ ...savedSnapshot, id: 6 });
+    flushTree(6);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.textContent).toContain('Snapshot saved.');
+    expect(fixture.componentInstance.canLeave()).toBe(true);
+  });
+
+  it('cancels a streamed upload and discards only the pending import', async () => {
+    const fixture = await startLocalLoad();
+    const http = TestBed.inject(HttpTestingController);
+    const upload = http.expectOne('/projects/7/imports/draft-id/files');
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[aria-label="Cancel project loading"]').click();
+    expect(upload.cancelled).toBe(true);
+    http.expectOne({ method: 'DELETE', url: '/projects/7/imports/draft-id' }).flush(null);
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.import-progress')).toBeNull();
+    expect(fixture.componentInstance.canLeave()).toBe(true);
+  });
+
+  it('confirms replacement and keeps the existing draft if the replacement fails', async () => {
+    const fixture = await startLocalLoad();
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/projects/7/imports/draft-id/files').flush({ id: 'draft-id', phase: 'ready', progress_percent: 100, bytes: 5, files: 1, error: null });
+    http.expectOne(req => req.url === '/projects/7/imports/draft-id/tree').flush({ path: '', entries: [] });
+    await fixture.whenStable();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    expect(fixture.componentInstance.canLeave()).toBe(false);
+    fixture.nativeElement.querySelector('.load-project').click();
+    http.expectNone('/projects/7/import-limits');
+    confirm.mockReturnValue(true);
+    fixture.nativeElement.querySelector('.load-project').click();
+    http.expectOne('/projects/7/import-limits').flush({ max_bytes: 104857600, max_files: 10000 });
+    await fixture.whenStable();
+    http.expectOne('/projects/7/imports').flush({ id: 'replacement', phase: 'uploading', progress_percent: null, bytes: 0, files: 0, error: null });
+    http.expectOne('/projects/7/imports/replacement/files').flush('Upload failed', { status: 502, statusText: 'Error' });
+    http.expectOne({ method: 'DELETE', url: '/projects/7/imports/replacement' }).flush(null);
+    http.expectNone({ method: 'DELETE', url: '/projects/7/imports/draft-id' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.textContent).toContain('Unsaved draft');
+    expect(fixture.nativeElement.textContent).toContain('Upload failed');
+    expect(fixture.nativeElement.querySelector('.snapshot-picker-header button').disabled).toBe(false);
+    fixture.destroy();
+    http.expectOne({ method: 'DELETE', url: '/projects/7/imports/draft-id' }).flush(null);
+    confirm.mockRestore();
+  });
+
   it('defaults the commit to the chosen branch head, allows overrides, and clears stale selections', async () => {
     const fixture = TestBed.createComponent(ProjectPage);
     fixture.detectChanges();

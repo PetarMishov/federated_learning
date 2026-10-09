@@ -14,10 +14,12 @@ mod get_snapshot_archive;
 mod get_snapshot_file;
 mod get_snapshot_tree;
 mod get_snapshots;
+mod imports;
 mod save_snapshot;
 
 pub fn projects_router() -> Router<AppState> {
     Router::new()
+        .merge(imports::router())
         .route(
             "/projects/{proj_id}/snapshots",
             post(save_snapshot::save_snapshot_request)

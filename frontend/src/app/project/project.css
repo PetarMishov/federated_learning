@@ -309,3 +309,17 @@ textarea.file-content {
 .file-context-menu button { display: block; width: 100%; border: none; background: transparent; padding: 8px 12px; text-align: left; }
 .file-context-menu button:hover, .file-context-menu button:focus-visible { background: #eee; }
 .file-entry:focus-visible { outline: 2px solid #666; outline-offset: -2px; }
+
+.browse-folder {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.snapshot-picker { position: relative; }
+.import-progress { position: absolute; right: 16px; top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.import-progress progress { width: 100px; height: 5px; accent-color: #444; }
+.import-progress button { border: 0; background: transparent; padding: 2px 4px; font-size: 16px; }
+.import-error { flex-basis: 100%; margin: 0; font-size: 13px; }
+.local-path input[readonly] { cursor: default; }
+
+@media (max-width: 900px) { .import-progress span { display: none; } .import-progress progress { width: 60px; } }

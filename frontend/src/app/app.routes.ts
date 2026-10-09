@@ -25,7 +25,7 @@ export const routes: Routes = [
       { path: 'connectors', component: ConnectorsPage },
       { path: 'organizations/:id', component: OrganizationPage },
       { path: 'organizations/:id/roles', component: RolesPage },
-      { path: 'organizations/:orgId/projects/:id', component: ProjectPage },
+      { path: 'organizations/:orgId/projects/:id', component: ProjectPage, canDeactivate: [(component: ProjectPage) => component.canLeave()] },
     ],
   },
   { path: '**', redirectTo: 'login' },

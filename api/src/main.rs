@@ -2,6 +2,7 @@ mod auth;
 mod connectors;
 mod db;
 pub mod git;
+mod imports;
 mod routers;
 mod snapshots;
 mod state;
@@ -18,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoding_key = state::signing_key(&secret)?;
     let decoding_key = state::decoding_key(&secret)?;
     let git = git::GitClient::from_env()?;
+    let imports = imports::ImportManager::new(&git, imports::ImportLimits::from_env()?)?;
     let github = connectors::github::authorization::GithubAuthorization::from_env()?.map(Arc::new);
     let gitlab = connectors::gitlab::authorization::GitlabAuthorization::from_env()?.map(Arc::new);
     let repositories = connectors::repositories::RepositoryClient::from_env()?.map(Arc::new);
@@ -41,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routers::connectors_router())
         .fallback(not_found)
         .layer(Extension(gitlab))
+        .layer(Extension(imports))
         .layer(Extension(github))
         .layer(Extension(repositories))
         .with_state(app_state);

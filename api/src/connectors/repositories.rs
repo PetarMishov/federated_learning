@@ -133,6 +133,93 @@ impl RepositoryClient {
         })
     }
 
+    /// Resolve one repository's HTTPS clone URL without trusting client URLs.
+    pub(crate) async fn import_source(
+        &self,
+        provider: Provider,
+        user_id: i32,
+        encrypted: &str,
+        repository: &str,
+    ) -> Result<(Url, String), RepositoryError> {
+        let token = self
+            .cipher
+            .decrypt(provider.name(), user_id, encrypted)
+            .map_err(|_| RepositoryError::InvalidCredential)?;
+        let base = match provider {
+            Provider::Github => &self.github_url,
+            Provider::Gitlab => &self.gitlab_url,
+        };
+        let mut url = base.clone();
+        match provider {
+            Provider::Github => {
+                let parts = repository.split('/').collect::<Vec<_>>();
+                if parts.len() != 2
+                    || parts
+                        .iter()
+                        .any(|part| part.is_empty() || *part == "." || *part == "..")
+                {
+                    return Err(RepositoryError::Rejected);
+                }
+                url.path_segments_mut()
+                    .map_err(|_| RepositoryError::Unavailable)?
+                    .pop_if_empty()
+                    .extend(["repos", parts[0], parts[1]]);
+            }
+            Provider::Gitlab => {
+                if repository.parse::<i64>().ok().is_none_or(|id| id <= 0) {
+                    return Err(RepositoryError::Rejected);
+                }
+                url = base
+                    .join(&format!("api/v4/projects/{repository}"))
+                    .map_err(|_| RepositoryError::Unavailable)?;
+            }
+        }
+        let request = self.client.get(url);
+        let request = match provider {
+            Provider::Github => request
+                .bearer_auth(&token)
+                .header("Accept", "application/vnd.github+json"),
+            Provider::Gitlab => request.header("PRIVATE-TOKEN", &token),
+        };
+        let response = request
+            .send()
+            .await
+            .map_err(|_| RepositoryError::Unavailable)?;
+        if matches!(response.status().as_u16(), 401 | 403 | 404) {
+            return Err(RepositoryError::Rejected);
+        }
+        if !response.status().is_success() {
+            return Err(RepositoryError::Unavailable);
+        }
+        let metadata: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| RepositoryError::Unavailable)?;
+        let key = match provider {
+            Provider::Github => "clone_url",
+            Provider::Gitlab => "http_url_to_repo",
+        };
+        let clone = metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or(RepositoryError::Unavailable)?;
+        let clone = Url::parse(clone).map_err(|_| RepositoryError::Unavailable)?;
+        let cloud_host = provider == Provider::Github
+            && base.host_str() == Some("api.github.com")
+            && clone.host_str() == Some("github.com")
+            && clone.port_or_known_default() == Some(443);
+        if !(clone.origin() == base.origin() || cloud_host)
+            || clone.scheme() != base.scheme()
+            || !clone.username().is_empty()
+            || clone.password().is_some()
+            || clone.query().is_some()
+            || clone.fragment().is_some()
+        {
+            return Err(RepositoryError::Rejected);
+        }
+        Ok((clone, token))
+    }
+
     pub async fn branches(
         &self,
         provider: Provider,
@@ -297,6 +384,63 @@ mod tests {
     };
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn import_urls_use_enterprise_api_paths_and_cannot_forward_tokens_to_other_origins() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let clone_base = base.clone();
+        let app = Router::new().route(
+            "/api/v3/repos/Org/{repo}",
+            get(
+                move |axum::extract::Path(repo): axum::extract::Path<String>,
+                      headers: HeaderMap| {
+                    let base = clone_base.clone();
+                    async move {
+                        assert_eq!(headers["authorization"], "Bearer saved-token");
+                        let url = match repo.as_str() {
+                            "Valid" => format!("{base}/Org/Valid.git"),
+                            "Other" => "https://attacker.invalid/Org/Other.git".into(),
+                            "Credentials" => {
+                                base.replace("http://", "http://secret@") + "/repo.git"
+                            }
+                            "Query" => format!("{base}/repo.git?secret=true"),
+                            _ => "file:///etc/passwd".into(),
+                        };
+                        Json(serde_json::json!({"clone_url":url}))
+                    }
+                },
+            ),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client =
+            RepositoryClient::new(&base, &format!("{base}/api/v3"), &STANDARD.encode([7; 32]))
+                .unwrap();
+        let encrypted = client.cipher.encrypt("github", 12, "saved-token").unwrap();
+        let (url, token) = client
+            .import_source(Provider::Github, 12, &encrypted, "Org/Valid")
+            .await
+            .unwrap();
+        assert_eq!(url.as_str(), format!("{base}/Org/Valid.git"));
+        assert_eq!(token, "saved-token");
+        for repo in ["Other", "Credentials", "Query", "File"] {
+            assert_eq!(
+                client
+                    .import_source(Provider::Github, 12, &encrypted, &format!("Org/{repo}"))
+                    .await
+                    .err(),
+                Some(RepositoryError::Rejected)
+            );
+        }
+        assert_eq!(
+            client
+                .import_source(Provider::Github, 13, &encrypted, "Org/Valid")
+                .await
+                .err(),
+            Some(RepositoryError::InvalidCredential)
+        );
+        server.abort();
+    }
 
     #[tokio::test]
     async fn lists_both_providers_using_read_requests_and_safe_pagination() {

@@ -1,12 +1,17 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
 import { Component, DestroyRef, OnInit, inject, signal, computed, HostListener } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
-import { BehaviorSubject, EMPTY, Subject, catchError, finalize, startWith, switchMap, tap, skip, takeUntil, of } from 'rxjs';
+import { BehaviorSubject, EMPTY, Subject, Subscription, from, timer, expand, filter, take, catchError, finalize, startWith, switchMap, tap, skip, takeUntil, of } from 'rxjs';
+import { folderFiles } from './folder-files';
 import { BranchPicker } from '../branch-picker/branch-picker';
 import { RepositoryPicker } from '../repository-picker/repository-picker';
-import { Branch, Repository, Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, UsersApi } from '../users-api';
+import { Branch, Repository, Deployment, Member, Snapshot, SnapshotFile, SnapshotPreviewTooLarge, SnapshotTreeEntry, SnapshotOperation, ImportStatus, UsersApi } from '../users-api';
+
+type EditorSource =
+  | { kind: 'snapshot'; id: number; project_id: number }
+  | { kind: 'draft'; id: string; project_id: number };
 
 @Component({
   selector: 'app-project',
@@ -22,7 +27,7 @@ export class ProjectPage implements OnInit {
   private readonly retryDeployments = new Subject<void>();
   private readonly retryMembers = new Subject<void>();
   private readonly snapshotSelection = new Subject<number | null>();
-  private readonly loadedSnapshot = new BehaviorSubject<Snapshot | null>(null);
+  private readonly loadedSnapshot = new BehaviorSubject<EditorSource | null>(null);
   private readonly directorySelection = new Subject<string>();
   private readonly fileSelection = new Subject<string | null>();
   protected readonly directoryPath = signal('');
@@ -36,14 +41,14 @@ export class ProjectPage implements OnInit {
   private readonly retrySnapshots = new Subject<number>();
   private autoSelectSnapshot = true;
   private pendingOpenFile: { snapshotId: number; path: string } | null = null;
-  private readonly drafts = signal(new Map<number, Map<string, { original: string | null; content: string }>>());
-  private readonly draftFolders = signal(new Map<number, Set<string>>());
+  private readonly drafts = signal(new Map<number | string, Map<string, { original: string | null; content: string }>>());
+  private readonly draftFolders = signal(new Map<number | string, Set<string>>());
   protected readonly creationKind = signal<'file' | 'folder' | 'rename' | null>(null);
   protected readonly creationError = signal('');
-  private readonly directoryCache = signal(new Map<number, Map<string, SnapshotTreeEntry[]>>());
+  private readonly directoryCache = signal(new Map<number | string, Map<string, SnapshotTreeEntry[]>>());
   protected readonly expandedFolders = signal(new Set<string>());
-  private readonly operations = signal(new Map<number, SnapshotOperation[]>());
-  protected readonly structuralChanges = computed(() => this.operations().get(this.selectedSnapshotId() ?? -1) ?? []);
+  private readonly operations = signal(new Map<number | string, SnapshotOperation[]>());
+  protected readonly structuralChanges = computed(() => this.operations().get(this.editorSource()?.id ?? -1) ?? []);
   protected readonly movingEntry = signal(false);
   protected readonly contextMenu = signal<{ entry: SnapshotTreeEntry | null; x: number; y: number } | null>(null);
   private menuFocusTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -63,8 +68,8 @@ export class ProjectPage implements OnInit {
   });
 
   private children(parent: string): SnapshotTreeEntry[] {
-    const id = this.selectedSnapshotId();
-    if (id === null) return [];
+    const id = this.editorSource()?.id;
+    if (id === undefined) return [];
     const entries = new Map((this.directoryCache().get(id)?.get(parent) ?? []).map((entry) => [entry.path, entry]));
     const add = (path: string, kind: 'file' | 'directory') => {
       if (this.parentPath(path) !== parent) return;
@@ -78,8 +83,8 @@ export class ProjectPage implements OnInit {
   protected readonly saveError = signal('');
   protected readonly saveMessage = signal('');
   protected readonly changedFiles = computed(() => {
-    const id = this.selectedSnapshotId();
-    return id === null ? [] : [...(this.drafts().get(id)?.entries() ?? [])]
+    const id = this.editorSource()?.id;
+    return id === undefined ? [] : [...(this.drafts().get(id)?.entries() ?? [])]
       .filter(([, draft]) => draft.content !== draft.original)
       .map(([path, draft]) => ({ path, content: draft.content }));
   });
@@ -103,6 +108,17 @@ export class ProjectPage implements OnInit {
   protected readonly selectedRepository = signal<Repository | null>(null);
   protected readonly selectedBranch = signal<Branch | null>(null);
   protected readonly sourceCommit = signal('');
+  protected readonly editorSource = signal<EditorSource | null>(null);
+  protected readonly importDraft = signal<ImportStatus | null>(null);
+  protected readonly importLoading = signal(false);
+  protected readonly importError = signal('');
+  protected readonly importPhase = signal<ImportStatus['phase']>('preparing');
+  protected readonly importProgress = signal<number | null>(null);
+  private importRequest: Subscription | undefined;
+  private projectId = 0;
+  private activeImport: { projectId: number; id: string } | null = null;
+  protected readonly localPath = signal('');
+  protected readonly localFiles = signal<File[]>([]);
   protected readonly repositoryProvider = computed(() => this.source() === 'gitlab' ? 'gitlab' : 'github');
   protected readonly drawer = signal<'members' | 'deployments' | null>(null);
   protected readonly queryParams = toSignal(this.route.queryParamMap, {
@@ -113,6 +129,8 @@ export class ProjectPage implements OnInit {
     this.destroyRef.onDestroy(() => {
       clearTimeout(this.commitCopyTimeout);
       clearTimeout(this.menuFocusTimeout);
+      this.cancelImport();
+      this.discardDraft();
     });
   }
 
@@ -137,7 +155,7 @@ export class ProjectPage implements OnInit {
             const original = this.originalPath(path);
             const tree = this.draftFolders().get(saved.id)?.has(path) || original === null
               ? of({ entries: [] as SnapshotTreeEntry[] })
-              : this.api.getSnapshotTree(saved.project_id, saved.id, original);
+              : this.readTree(saved, original);
             return tree.pipe(
               tap((tree) => {
                 const entries = tree.entries.map((entry) => this.transformEntry(entry)).filter((entry): entry is SnapshotTreeEntry => entry !== null);
@@ -178,7 +196,7 @@ export class ProjectPage implements OnInit {
             this.fileLoading.set(true);
             const draft = this.drafts().get(saved.id)?.get(path);
             const request = draft?.original === null ? of({ path, content: draft.content })
-              : this.api.getSnapshotFile(saved.project_id, saved.id, this.originalPath(path) ?? path);
+              : this.readFile(saved, this.originalPath(path) ?? path);
             return request.pipe(
               tap((response) => {
                 const file = { ...response, path };
@@ -215,6 +233,9 @@ export class ProjectPage implements OnInit {
 
     this.route.paramMap.pipe(
       switchMap((params) => {
+        this.projectId = Number(params.get('id'));
+        this.cancelImport();
+        this.discardDraft();
         this.pendingOpenFile = null;
         this.operations.set(new Map());
         this.directoryCache.set(new Map());
@@ -226,7 +247,7 @@ export class ProjectPage implements OnInit {
         return this.snapshotSelection.pipe(
           startWith(null),
           switchMap((snapshotId) => {
-            this.loadedSnapshot.next(null);
+            this.setEditor(null);
             this.snapshot.set(null);
             this.clearCommitCopyMessage();
             this.snapshotError.set('');
@@ -236,7 +257,7 @@ export class ProjectPage implements OnInit {
             return this.api.getSnapshot(params.get('id') ?? '', snapshotId).pipe(
               tap((snapshot) => {
                 this.snapshot.set(snapshot);
-                this.loadedSnapshot.next(snapshot);
+                this.setEditor({ kind: 'snapshot', id: snapshot.id, project_id: snapshot.project_id });
                 if (this.pendingOpenFile?.snapshotId === snapshot.id) {
                   this.fileSelection.next(this.pendingOpenFile.path);
                   this.pendingOpenFile = null;
@@ -351,10 +372,147 @@ export class ProjectPage implements OnInit {
     ).subscribe();
   }
 
+  private unsavedWork() {
+    return this.importDraft() !== null
+      || [...this.drafts().values()].some(files => [...files.values()].some(file => file.content !== file.original))
+      || [...this.operations().values()].some(operations => operations.length > 0);
+  }
+
+  canLeave() {
+    return (!this.unsavedWork() && !this.importLoading()) || window.confirm('Discard unsaved work and leave this project?');
+  }
+
+  @HostListener('window:beforeunload', ['$event'])
+  protected beforeUnload(event: BeforeUnloadEvent) {
+    if (this.unsavedWork() || this.importLoading()) { event.preventDefault(); event.returnValue = ''; }
+  }
+
+  @HostListener('window:pagehide')
+  protected releaseImports() {
+    if (this.activeImport) this.api.discardImportOnExit(this.activeImport.projectId, this.activeImport.id);
+    const source = this.editorSource();
+    if (source?.kind === 'draft') this.api.discardImportOnExit(source.project_id, source.id);
+    this.importRequest?.unsubscribe();
+    this.activeImport = null;
+    this.importDraft.set(null);
+    this.importLoading.set(false);
+    this.drafts.set(new Map());
+    this.operations.set(new Map());
+    this.draftFolders.set(new Map());
+    this.setEditor(null);
+  }
+
+  @HostListener('window:pageshow', ['$event'])
+  protected restorePage(event: PageTransitionEvent) {
+    if (event.persisted) this.snapshotSelection.next(this.selectedSnapshotId());
+  }
+
+  private discardDraft() {
+    const draft = this.importDraft();
+    const source = this.editorSource();
+    if (draft && source?.kind === 'draft') this.api.discardImport(source.project_id, draft.id).subscribe({ error: () => {} });
+    this.importDraft.set(null);
+  }
+
+  protected cancelImport() {
+    this.importRequest?.unsubscribe();
+    this.importRequest = undefined;
+    if (this.activeImport) this.api.discardImport(this.activeImport.projectId, this.activeImport.id).subscribe({ error: () => {} });
+    this.activeImport = null;
+    this.importLoading.set(false);
+  }
+
+  private pollImport(project: number, initial: ImportStatus) {
+    return of(initial).pipe(
+      expand(status => ['ready', 'failed', 'cancelled'].includes(status.phase) ? EMPTY
+        : timer(400).pipe(switchMap(() => this.api.getImport(project, status.id)))),
+      tap(status => { this.importPhase.set(status.phase); this.importProgress.set(status.progress_percent); }),
+      filter(status => ['ready', 'failed', 'cancelled'].includes(status.phase)), take(1),
+    );
+  }
+
+  protected loadProject() {
+    if (this.importLoading() || this.savingSnapshot()) return;
+    const source = this.source();
+    const repository = this.selectedRepository();
+    const branch = this.selectedBranch();
+    const commit = this.sourceCommit().trim();
+    this.importError.set('');
+    if (source === 'local' && !this.localFiles().length) { this.importError.set('Choose a folder to load.'); return; }
+    if (source !== 'local' && (!repository || !branch || !/^[a-fA-F0-9]{40}$/.test(commit))) {
+      this.importError.set('Select a repository, branch, and full commit SHA.'); return;
+    }
+    if (this.unsavedWork() && !window.confirm('Replace this draft and discard its unsaved edits after the new project loads?')) return;
+    const previousEdits = JSON.stringify([this.changedFiles(), this.structuralChanges()]);
+    const project = this.projectId;
+    if (!Number.isSafeInteger(project) || project <= 0) { this.importError.set('Project not found.'); return; }
+    this.autoSelectSnapshot = false;
+    this.importLoading.set(true);
+    this.importPhase.set('preparing'); this.importProgress.set(null);
+    const selectedFiles = this.localFiles();
+    this.importRequest = this.api.getImportLimits(project).pipe(
+      switchMap(limits => source === 'local' ? from(folderFiles(selectedFiles, limits)) : of(null)),
+      switchMap(files => this.api.createImport(project, source,
+        source === 'local' ? undefined : source === 'github' ? repository!.full_name : String(repository!.id),
+        source === 'local' ? undefined : branch!.name, source === 'local' ? undefined : commit,
+      ).pipe(
+        tap(status => { this.activeImport = { projectId: project, id: status.id }; this.importPhase.set(status.phase); }),
+        switchMap(status => files === null ? this.pollImport(project, status) : this.api.uploadImport(project, status.id, files).pipe(
+          tap(event => {
+            if (event.type === HttpEventType.UploadProgress) {
+              this.importPhase.set('uploading'); this.importProgress.set(event.total ? Math.round(event.loaded * 100 / event.total) : null);
+            }
+          }),
+          filter(event => event.type === HttpEventType.Response),
+          switchMap(event => event.body ? this.pollImport(project, event.body) : EMPTY),
+        )),
+      )),
+      takeUntil(this.route.paramMap.pipe(skip(1))), takeUntilDestroyed(this.destroyRef),
+      finalize(() => this.importLoading.set(false)),
+    ).subscribe({
+      next: status => {
+        if (status.phase !== 'ready') { this.importError.set(status.error || 'Project loading was cancelled.'); this.cancelImport(); return; }
+        if (previousEdits !== JSON.stringify([this.changedFiles(), this.structuralChanges()])
+          && !window.confirm('You edited files while loading. Discard those edits and open the new project?')) { this.cancelImport(); return; }
+        this.discardDraft();
+        this.drafts.set(new Map());
+        this.draftFolders.set(new Map());
+        this.operations.set(new Map());
+        this.directoryCache.set(new Map());
+        this.activeImport = null;
+        this.snapshotSelection.next(null);
+        this.pendingOpenFile = null;
+        this.selectedSnapshotId.set(null);
+        this.importDraft.set(status);
+        this.saveError.set(''); this.saveMessage.set('');
+        this.setEditor({ kind: 'draft', id: status.id, project_id: project });
+      },
+      error: (error: unknown) => {
+        if (error instanceof HttpErrorResponse) {
+          this.handleFileAccessError(error);
+          this.importError.set(typeof error.error === 'string' && error.error ? error.error : 'Could not load project. Please try again.');
+        } else this.importError.set(error instanceof Error ? error.message : 'Could not load project.');
+        this.cancelImport();
+      },
+    });
+  }
+
   protected selectSource(source: 'github' | 'gitlab' | 'local') {
     if (this.source() === source) return;
     this.source.set(source);
     this.selectRepository(null);
+  }
+
+  protected selectLocalFolder(input: HTMLInputElement) {
+    const files = Array.from(input.files ?? []);
+    // Cancelling the dialog leaves the current path and folder selection intact.
+    if (!files.length) return;
+    const name = files[0].webkitRelativePath.split('/')[0];
+    if (!name) return;
+    this.localFiles.set(files);
+    this.localPath.set(name);
+    // Allow choosing the same folder again after a previous selection.
+    input.value = '';
   }
 
   protected selectRepository(repository: Repository | null) {
@@ -398,6 +556,21 @@ export class ProjectPage implements OnInit {
     }
   }
 
+  private setEditor(source: EditorSource | null) {
+    this.editorSource.set(source);
+    this.loadedSnapshot.next(source);
+  }
+
+  private readTree(source: EditorSource, path: string) {
+    return source.kind === 'draft' ? this.api.getImportTree(source.project_id, source.id, path)
+      : this.api.getSnapshotTree(source.project_id, source.id, path);
+  }
+
+  private readFile(source: EditorSource, path: string) {
+    return source.kind === 'draft' ? this.api.getImportFile(source.project_id, source.id, path)
+      : this.api.getSnapshotFile(source.project_id, source.id, path);
+  }
+
   private clearCommitCopyMessage() {
     clearTimeout(this.commitCopyTimeout);
     this.commitCopyMessage.set('');
@@ -411,7 +584,7 @@ export class ProjectPage implements OnInit {
   }
 
   protected createEntry(name: string) {
-    const id = this.snapshot()?.id;
+    const id = this.editorSource()?.id;
     const kind = this.creationKind();
     if (id === undefined || !kind || this.treeLoading() || this.treeError() || this.savingSnapshot() || this.movingEntry()) return;
     const bytes = new TextEncoder();
@@ -455,7 +628,7 @@ export class ProjectPage implements OnInit {
   }
 
   protected editFile(content: string) {
-    const saved = this.snapshot();
+    const saved = this.editorSource();
     const file = this.file();
     if (!saved || !file || this.savingSnapshot() || this.movingEntry()) return;
     const drafts = new Map(this.drafts());
@@ -474,14 +647,17 @@ export class ProjectPage implements OnInit {
   }
 
   protected saveSnapshot() {
-    const saved = this.snapshot();
+    const saved = this.editorSource();
     const files = this.changedFiles();
-    if (!saved || (!files.length && !this.structuralChanges().length) || this.savingSnapshot() || this.movingEntry()) return;
+    if (!saved || (saved.kind === 'snapshot' && !files.length && !this.structuralChanges().length) || this.savingSnapshot() || this.movingEntry() || this.importLoading()) return;
     const openedPath = this.selectedFilePath();
     this.savingSnapshot.set(true);
     this.saveError.set('');
     this.saveMessage.set('');
-    this.api.saveSnapshot(saved.project_id, saved.id, files, this.structuralChanges()).pipe(
+    const save = saved.kind === 'draft'
+      ? this.api.saveImportSnapshot(saved.project_id, saved.id, files, this.structuralChanges())
+      : this.api.saveSnapshot(saved.project_id, saved.id, files, this.structuralChanges());
+    save.pipe(
       takeUntil(this.route.paramMap.pipe(skip(1))),
       takeUntilDestroyed(this.destroyRef),
       finalize(() => this.savingSnapshot.set(false)),
@@ -507,6 +683,7 @@ export class ProjectPage implements OnInit {
         this.snapshots.update((snapshots) => [created, ...snapshots]);
         this.savingSnapshot.set(false);
         if (openedPath !== null) this.pendingOpenFile = { snapshotId: created.id, path: openedPath };
+        this.importDraft.set(null);
         this.selectSnapshot(created.id);
         this.saveMessage.set('Snapshot saved.');
       },
@@ -521,6 +698,8 @@ export class ProjectPage implements OnInit {
 
   protected selectSnapshot(snapshotId: number | null) {
     if (this.savingSnapshot() || this.movingEntry()) return;
+    if (this.importDraft() && !window.confirm('Discard the unsaved imported draft and open this snapshot?')) return;
+    this.discardDraft();
     this.creationKind.set(null);
     this.creationError.set('');
     this.saveError.set('');
@@ -572,7 +751,7 @@ export class ProjectPage implements OnInit {
     while (part) { expanded.add(part); part = this.parentPath(part); }
     this.expandedFolders.set(expanded);
   }
-  private cacheDirectory(id: number, path: string, entries: SnapshotTreeEntry[]) {
+  private cacheDirectory(id: number | string, path: string, entries: SnapshotTreeEntry[]) {
     const cache = new Map(this.directoryCache());
     const directories = new Map(cache.get(id));
     const combined = new Map((directories.get(path) ?? []).map((entry) => [entry.path, entry]));
@@ -607,7 +786,7 @@ export class ProjectPage implements OnInit {
   protected showContextMenu(event: MouseEvent, entry: SnapshotTreeEntry | null = null) {
     event.preventDefault();
     event.stopPropagation();
-    if (!this.snapshot() || this.savingSnapshot() || this.movingEntry() || this.treeLoading()) return;
+    if (!this.editorSource() || this.savingSnapshot() || this.movingEntry() || this.treeLoading()) return;
     this.menuTrigger = event.target instanceof HTMLElement ? event.target : null;
     this.contextMenu.set({ entry, x: Math.min(event.clientX, Math.max(0, window.innerWidth - 180)),
       y: Math.min(event.clientY, Math.max(0, window.innerHeight - 190)) });
@@ -649,7 +828,7 @@ export class ProjectPage implements OnInit {
   }
   protected deleteEntry() {
     const entry = this.contextMenu()?.entry;
-    const id = this.snapshot()?.id;
+    const id = this.editorSource()?.id;
     if (!entry || id === undefined || this.savingSnapshot() || this.movingEntry()) return;
     this.contextMenu.set(null);
     if (!this.isNewEntry(entry)) this.appendOperation({ kind: 'delete', path: entry.path });
@@ -657,7 +836,7 @@ export class ProjectPage implements OnInit {
     this.creationKind.set(null);
   }
   private isNewEntry(entry: SnapshotTreeEntry) {
-    const id = this.selectedSnapshotId()!;
+    const id = this.editorSource()!.id;
     if (entry.kind !== 'directory') return this.drafts().get(id)?.get(entry.path)?.original === null;
     if (!this.draftFolders().get(id)?.has(entry.path)) return false;
     let movedRoots: string[] = [];
@@ -670,14 +849,14 @@ export class ProjectPage implements OnInit {
   }
   private appendOperation(operation: SnapshotOperation) {
     const operations = new Map(this.operations());
-    const id = this.selectedSnapshotId()!;
+    const id = this.editorSource()!.id;
     operations.set(id, [...(operations.get(id) ?? []), operation]);
     this.operations.set(operations);
     this.saveError.set('');
     this.saveMessage.set('');
   }
   private rewriteDraftTree(entry: SnapshotTreeEntry, destination: string | null) {
-    const id = this.selectedSnapshotId()!;
+    const id = this.editorSource()!.id;
     const rewrite = (path: string) => this.contains(entry.path, path)
       ? destination === null ? null : destination + path.slice(entry.path.length) : path;
     const drafts = new Map(this.drafts());
@@ -722,7 +901,7 @@ export class ProjectPage implements OnInit {
     if (new TextEncoder().encode(destination).length > 4096) {
       this.creationError.set('This path is too long.'); return;
     }
-    const saved = this.snapshot();
+    const saved = this.editorSource();
     if (!saved || this.savingSnapshot() || this.movingEntry()) return;
     const parent = this.parentPath(destination);
     const apply = () => {
@@ -737,7 +916,7 @@ export class ProjectPage implements OnInit {
     };
     if (this.directoryCache().get(saved.id)?.has(parent) || this.draftFolders().get(saved.id)?.has(parent)) { apply(); return; }
     this.movingEntry.set(true);
-    this.api.getSnapshotTree(saved.project_id, saved.id, this.originalPath(parent) ?? parent).pipe(
+    this.readTree(saved, this.originalPath(parent) ?? parent).pipe(
       takeUntil(this.loadedSnapshot.pipe(skip(1))), takeUntilDestroyed(this.destroyRef),
       finalize(() => this.movingEntry.set(false)),
     ).subscribe({

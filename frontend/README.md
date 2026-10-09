@@ -92,8 +92,7 @@ local folder imports have no repository selector.
 
 The API serves `GET /connectors/{github|gitlab}/repositories?page=1`. Missing or
 rejected provider credentials produce an explanatory message and retry control.
-GitHub and GitLab connections can be created through the Connectors page. Repository import itself is
-still separate from selecting a repository.
+GitHub and GitLab connections can be created through the Connectors page. Press Load project to open the selected commit as an editable, unsaved draft.
 
 ## Connectors page
 
@@ -119,5 +118,35 @@ changing branches selects the new branch's head.
 
 GitLab tokens require `read_api` and `read_repository`; replace older saved tokens
 that only have `read_user` and `read_repository`. GitHub fine-grained tokens need
-Contents read permission. Loading/deploying project code from a selected provider
-commit remains future work.
+Contents read permission. Load project imports the selected commit. Deployment behavior is unchanged.
+
+## Local folder selection
+
+Local Folder has a read-only folder display and a compact Browse button opening
+the browser's directory chooser. Browsers expose the folder name and selected
+files, not the absolute path. Cancelling the chooser preserves the selection.
+Load project honors nested `.gitignore` rules and excludes `.git` before streaming
+files. Folder selection alone does not upload anything.
+
+## Loading projects
+
+Load project supports local folders and exact GitHub/GitLab commits. A compact
+progress bar and cancel control appear on the right of Saved snapshots. Transfers
+show measured percentages when available; preparation uses an indeterminate bar.
+The previous editor remains available until loading succeeds. Replacing unsaved
+work requires confirmation, and a failed/cancelled load preserves it.
+
+Loaded projects appear as Unsaved draft and use the existing file editor. Save
+snapshot publishes the draft even without edits. Files and directories load on
+demand; binary and large files remain included even when the editor cannot preview
+them. Provider symlinks stay links; local browser uploads contain regular files
+with no portable executable/symlink metadata. Provider submodules are rejected.
+
+The API defaults to 100 MiB and 10,000 files; configure
+`PROJECT_IMPORT_MAX_BYTES` and `PROJECT_IMPORT_MAX_FILES` in the root `.env` and
+restart the API. Size counts actual file contents rather than transfer overhead.
+Provider transfer speed and local upload speed still depend on the network.
+
+Drafts last for the current visit; leaving/refreshing warns about unsaved work.
+The API removes abandoned staging after 30 minutes without access. Saving,
+discarding, or cancellation releases staging. See the [import contract](../docs/project-import.md).

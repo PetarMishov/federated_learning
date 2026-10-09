@@ -231,8 +231,8 @@ Each file must specify exactly one of `content` (UTF-8 text) or
 defaults to `false`. Without a base, omitted files are absent from the new snapshot
 and an empty `files` array saves an empty Git tree. With a base, omitted files remain
 unless deleted by an operation. Earlier snapshots always remain intact.
-Uploads are recorded as `source: "local"`; provider imports and source provenance
-are separate future work. Include project code only, excluding local datasets.
+Uploads through this endpoint are recorded as `source: "local"`. Provider drafts
+record source provenance through the import endpoints. Include project code only, excluding local datasets.
 
 Paths must be unique and relative, with no empty, `.` or `..` components,
 backslashes, colons, control characters, or `.git` components (case-insensitive,
@@ -326,8 +326,8 @@ for a token without an expiry). Tokens must be replaced manually after expiry.
 Route registration lives in `src/routers/connectors/mod.rs`, matching the other
 routers. The handler, provider checks, and database persistence live in their
 respective router, connector, and database modules. The development proxy forwards
-`/connectors` to the API. Repository import and the frontend Connectors page remain
-separate work.
+`/connectors` to the API. The frontend Connectors page supports both providers;
+project import uses the saved connection.
 
 References: [GitLab token API](https://docs.gitlab.com/api/personal_access_tokens/)
 and [read scopes](https://docs.gitlab.com/security/tokens/access_token_scopes/).
@@ -364,7 +364,7 @@ connection.
 The frontend fetches pages on opening the selector, searches every loaded
 repository name and namespace without case sensitivity, and clears repository
 selection on provider changes. The repository choice is kept in the project form
-alongside branch/commit inputs; executing provider imports remains separate work.
+alongside branch/commit inputs; Load project imports the selected exact commit as an editable draft.
 
 References: [GitHub repository discovery](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)
 and [GitLab token associations](https://docs.gitlab.com/api/personal_access_tokens/#list-all-token-associations).
@@ -418,7 +418,64 @@ Repository access or token permission failures return `403`; provider failures
 return `502`. The project form offers searchable branch selection and defaults
 the editable commit SHA to the selected branch's head. Changing repository,
 provider, or branch resets the commit selection. Historical SHA selection is
-prepared for future import/deployment behavior; no deployment action is added.
+used by Load project; no deployment action is added.
 
 References: [GitLab branches API](https://docs.gitlab.com/api/branches/),
 [GitHub branches API](https://docs.github.com/en/rest/branches/branches#list-branches).
+
+
+## Project import drafts
+
+`GET /projects/{id}/import-limits` returns `max_bytes` and `max_files`. Configure
+`PROJECT_IMPORT_MAX_BYTES` (default 104857600) and `PROJECT_IMPORT_MAX_FILES`
+(default 10000) in the root `.env`; both must be positive. Restart after changes.
+Limits count actual file contents and apply again when publishing an edited draft.
+Snapshot edit patches retain the existing 64 MiB JSON request limit.
+
+`POST /projects/{id}/imports` starts a draft and returns `202` with its UUID/status:
+
+```json
+{"source":"local"}
+```
+
+```json
+{"source":"github","repository":"owner/repo","branch":"main","commit_sha":"FULL_40_CHARACTER_SHA"}
+```
+
+For GitLab use its numeric project ID as `repository`. Provider credentials are
+read from the caller's encrypted connection. GitLab needs `read_api` and
+`read_repository`; GitHub needs Contents read. The configured private provider
+server is also used for imports. No recursive submodule/LFS fetching occurs.
+
+For local imports, `POST /projects/{id}/imports/{uuid}/files` streams multipart
+file fields. Field names are URI-encoded relative paths; files are stored under
+numbered private staging names, not caller filesystem paths. Byte/file limits,
+path validation and duplicate checks run during upload. The browser applies
+`.gitignore` rules; the API independently enforces path and capacity limits.
+Reverse proxies must permit the configured content size plus multipart overhead
+and a suitable upload duration.
+
+Poll `GET /projects/{id}/imports/{uuid}`. Status includes `phase`
+(`uploading`, `downloading`, `preparing`, `ready`, `failed`, `cancelled`), nullable
+`progress_percent`, actual `bytes`/`files`, and nullable `error`. Percentages
+measure transfer progress; preparing has no fabricated percentage. Use `DELETE`
+on that URL to cancel/discard. Deleting a draft while publication is running
+returns `409`. Provider downloads have a five-minute deadline and a temporary
+Git-storage ceiling of twice the contents limit plus 16 MiB.
+
+Ready drafts expose `GET .../{uuid}/tree?path=` and `GET .../{uuid}/file?path=`
+with the existing tree/file formats and preview limits. `POST .../{uuid}/snapshot`
+accepts the existing `files`/`operations` patch, without `base_snapshot_id`.
+An empty patch saves the complete imported tree. The `201` response is snapshot
+metadata, including provider provenance. Saving removes the temporary draft.
+
+All draft operations require a valid session, project editing permission, and
+matching user/project ownership. Discard still permits owner cleanup after edit
+permission is revoked. Limits and draft read responses use `no-store`. Staging
+expires after 30 idle minutes; at most two drafts per user and eight total are
+retained. Jobs are temporary and are lost when the API restarts. After a crash, startup and periodic cleanup remove abandoned private `.imports-*`
+directories once they are at least one minute old. Filesystem leases protect directories owned by another live API process.
+
+The [import contract](../docs/project-import.md) and
+[storage decision](../docs/adr/0003-stage-project-imports-before-saving-snapshots.md)
+explain the publication boundary and browser limitations.

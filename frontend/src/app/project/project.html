@@ -21,7 +21,12 @@
         @if (source() === 'local') {
           <div class="snapshot-field local-path">
             <label for="snapshot-path">Path</label>
-            <input id="snapshot-path" type="text" placeholder="/path/to/project">
+            <input id="snapshot-path" type="text" placeholder="Choose a folder" readonly [value]="localPath()"
+              title="Selected folder; browsers hide its full path">
+            <input type="file" #folderInput webkitdirectory multiple hidden
+              (change)="selectLocalFolder(folderInput)">
+            <button type="button" class="browse-folder" aria-label="Browse local folder"
+              (click)="folderInput.click()">Browse…</button>
           </div>
         } @else {
           <app-repository-picker [provider]="repositoryProvider()" (selectionChange)="selectRepository($event)" />
@@ -34,14 +39,15 @@
               title="Latest branch commit; editable">
           </div>
         }
-        <button type="button">Load project</button>
+        <button type="button" class="load-project" (click)="loadProject()" [disabled]="importLoading() || savingSnapshot()">Load project</button>
       </div>
+      @if (importError()) { <p class="import-error" role="alert">{{ importError() }}</p> }
 </section>
 <section class="snapshot-picker" aria-labelledby="saved-snapshots-heading">
   <div class="snapshot-picker-controls">
     <div class="snapshot-picker-header">
       <h2 id="saved-snapshots-heading">Saved snapshots</h2>
-      <button type="button" (click)="saveSnapshot()" [disabled]="!snapshot() || (!changedFiles().length && !structuralChanges().length) || savingSnapshot() || movingEntry() || snapshotLoading()">
+      <button type="button" (click)="saveSnapshot()" [style.visibility]="importLoading() ? 'hidden' : null" [disabled]="!editorSource() || (!importDraft() && !changedFiles().length && !structuralChanges().length) || savingSnapshot() || movingEntry() || snapshotLoading() || importLoading()">
         {{ savingSnapshot() ? 'Saving...' : 'Save as new snapshot' }}
       </button>
     </div>
@@ -61,6 +67,7 @@
         <select [disabled]="savingSnapshot() || movingEntry()" id="saved-snapshot" #snapshotPicker [value]="selectedSnapshotId() ?? ''"
           (change)="selectSnapshot(+snapshotPicker.value)">
 
+          @if (importDraft()) { <option value="" selected disabled>Unsaved draft</option> }
           @if (snapshot(); as saved) {
             @if (!selectedSnapshotIsListed()) {
               <option [value]="saved.id" selected>Snapshot #{{ saved.id }} · {{ saved.created_at | date:'short' }}</option>
@@ -80,8 +87,16 @@
       }
     </div>
   </div>
+  @if (importLoading()) {
+    <div class="import-progress" role="status">
+      <span>{{ importPhase() === 'uploading' ? 'Uploading' : importPhase() === 'downloading' ? 'Downloading' : 'Preparing' }}</span>
+      <progress max="100" [attr.value]="importProgress()" aria-label="Project loading progress"></progress>
+      @if (importProgress() !== null) { <small>{{ importProgress() }}%</small> }
+      <button type="button" (click)="cancelImport()" aria-label="Cancel project loading">×</button>
+    </div>
+  }
   @if (selectedSnapshotId() !== null) {
-    <section id="snapshot-details" class="snapshot-details" aria-label="Selected snapshot details">
+    <section id="snapshot-details" class="snapshot-details" [style.visibility]="importLoading() ? 'hidden' : null" aria-label="Selected snapshot details">
       <div aria-live="polite" [attr.aria-busy]="snapshotLoading()">
         @if (snapshotLoading()) {
           <p role="status">Loading snapshot...</p>
@@ -140,8 +155,8 @@
     <aside class="file-explorer" aria-labelledby="explorer-heading" (contextmenu)="showContextMenu($event)"
       (dragover)="allowDrop($event)" (drop)="dropEntry($event)">
       <h2 id="explorer-heading">Files</h2>
-      @if (snapshot(); as saved) {
-        <p>Snapshot #{{ saved.id }}</p>
+      @if (editorSource(); as edited) {
+        <p>{{ edited.kind === 'draft' ? 'Unsaved draft' : 'Snapshot #' + edited.id }}</p>
         @if (creationKind(); as kind) {
           <form class="file-create-form" (submit)="$event.preventDefault(); createEntry(entryName.value)">
             <label for="new-entry-name">{{ kind === 'rename' ? 'New name' : kind === 'file' ? 'File name' : 'Folder name' }}</label>
