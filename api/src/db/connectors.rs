@@ -38,6 +38,41 @@ pub async fn save_gitlab_connection(
     Ok(result.rows_affected() == 1)
 }
 
+pub async fn save_github_connection(
+    pool: &PgPool,
+    user_id: i32,
+    claims: &Claims,
+    connection: &AuthorizedConnection,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO provider_connections
+            (user_id, provider, external_account_id, external_username,
+             access_token_encrypted, token_expires_at, granted_permissions)
+         SELECT $1, 'github', $2, $3, $4, $5::text::timestamptz, $6
+         WHERE to_timestamp($7::double precision) > clock_timestamp()
+           AND NOT EXISTS (SELECT 1 FROM revoked_tokens WHERE jti = $8)
+         ON CONFLICT (user_id, provider) DO UPDATE SET
+            external_account_id = EXCLUDED.external_account_id,
+            external_username = EXCLUDED.external_username,
+            access_token_encrypted = EXCLUDED.access_token_encrypted,
+            refresh_token_encrypted = NULL,
+            token_expires_at = EXCLUDED.token_expires_at,
+            granted_permissions = EXCLUDED.granted_permissions,
+            updated_at = CURRENT_TIMESTAMP, invalidated_at = NULL",
+    )
+    .bind(user_id)
+    .bind(&connection.response.external_account_id)
+    .bind(&connection.response.external_username)
+    .bind(&connection.access_token_encrypted)
+    .bind(&connection.expires_at)
+    .bind(&connection.granted_permissions)
+    .bind(claims.exp as f64)
+    .bind(&claims.jti)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// Credentials are always scoped to the authenticated user and usable connection.
 pub async fn get_connection_token(
     pool: &PgPool,

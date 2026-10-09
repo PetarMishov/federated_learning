@@ -72,7 +72,7 @@ impl RepositoryClient {
         };
         Self::new(
             &env::var("GITLAB_BASE_URL").unwrap_or_else(|_| "https://gitlab.com".into()),
-            "https://api.github.com/",
+            &super::github::configured_base_url()?,
             &key,
         )
         .map(Some)
@@ -80,8 +80,8 @@ impl RepositoryClient {
 
     fn new(gitlab: &str, github: &str, key: &str) -> Result<Self, Box<dyn Error>> {
         let gitlab_url = Url::parse(gitlab)?;
-        let github_url = Url::parse(github)?;
-        for url in [&gitlab_url, &github_url] {
+        let github_url = super::github::api_base_url(github)?;
+        for url in [&gitlab_url] {
             let loopback = url.scheme() == "http"
                 && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
             if !(url.scheme() == "https" || loopback)
@@ -132,6 +132,12 @@ impl RepositoryClient {
         url.query_pairs_mut()
             .append_pair("per_page", "100")
             .append_pair("page", &page.to_string());
+        if provider == Provider::Gitlab {
+            // Reporter is the standard minimum role for reading repository code.
+            // Unfiltered associations include public access and can time out on
+            // GitLab.com even when the user belongs to only one project.
+            url.query_pairs_mut().append_pair("min_access_level", "20");
+        }
         let mut request = self.client.get(url);
         request = match provider {
             Provider::Github => request
@@ -199,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn lists_both_providers_using_read_requests_and_safe_pagination() {
         let app = Router::new()
-            .route("/user/repos", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+            .route("/api/v3/user/repos", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
                 assert_eq!(headers["authorization"], "Bearer saved-github-token");
                 assert_eq!(headers["user-agent"], "federated-learning");
                 assert_eq!(query["page"], "2");
@@ -216,7 +222,7 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let key = STANDARD.encode([7; 32]);
-        let client = RepositoryClient::new(&base, &base, &key).unwrap();
+        let client = RepositoryClient::new(&base, &format!("{base}/api/v3"), &key).unwrap();
         for (provider, name) in [
             (Provider::Github, "Org/Github"),
             (Provider::Gitlab, "Lab/Gitlab"),
@@ -239,6 +245,38 @@ mod tests {
             );
         }
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn gitlab_discovery_limits_associations_to_repository_read_access() {
+        // Unfiltered discovery can scan public associations and time out even
+        // for an account with a single repository. Model that provider failure.
+        let app = Router::new().route(
+            "/api/v4/personal_access_tokens/self/associations",
+            get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(headers["private-token"], "saved-token");
+                assert_eq!(query["page"], "1");
+                assert_eq!(query["per_page"], "100");
+                if query.get("min_access_level").map(String::as_str) != Some("20") {
+                    return (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "unfiltered discovery timed out"})));
+                }
+                (StatusCode::OK, Json(serde_json::json!({"groups": [], "projects": [{"id": 42, "path_with_namespace": "Lab/OnlyRepo", "web_url": "https://gitlab.com/Lab/OnlyRepo"}]})))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = RepositoryClient::new(&base, &base, &STANDARD.encode([7; 32])).unwrap();
+        let token = client.cipher.encrypt("gitlab", 12, "saved-token").unwrap();
+        let result = client.list(Provider::Gitlab, 12, &token, 1).await;
+        task.abort();
+        let page =
+            result.expect("single repository should load without unfiltered discovery timing out");
+        assert_eq!(page.repositories.len(), 1);
+        assert_eq!(page.repositories[0].full_name, "Lab/OnlyRepo");
+        assert!(!page.has_more);
     }
 
     #[tokio::test]

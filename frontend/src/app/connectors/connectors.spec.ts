@@ -35,12 +35,12 @@ describe('Connectors page', () => {
     fixture.detectChanges();
   }
 
-  it('keeps tokens masked without a reveal control and makes the unavailable GitHub form explicit', () => {
+  it('keeps both provider tokens masked without a reveal control', () => {
     const fixture = create();
     expect(fixture.nativeElement.querySelector('#gitlab-token').type).toBe('password');
     expect(fixture.nativeElement.querySelector('button[type="submit"]').disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('#github-token').disabled).toBe(true);
-    expect(fixture.nativeElement.textContent).toContain('GitHub token connections are not available yet.');
+    expect(fixture.nativeElement.querySelector('#github-token').disabled).toBe(false);
+    expect(fixture.nativeElement.querySelector('#github-token').type).toBe('password');
     TestBed.inject(HttpTestingController).expectNone('/connectors/github/authorize');
     expect(fixture.nativeElement.querySelector('.visibility-toggle')).toBeNull();
   });
@@ -64,6 +64,32 @@ describe('Connectors page', () => {
     expect(fixture.nativeElement.querySelector('[role="status"]').textContent).toContain('Connected as alice');
     expect(JSON.stringify(sessionStorage)).not.toContain('glpat-example');
     expect(JSON.stringify(localStorage)).not.toContain('glpat-example');
+  });
+
+  it('saves GitHub independently of GitLab and clears the token after success without storing it in the browser', async () => {
+    const fixture = create();
+    const input = fixture.nativeElement.querySelector('#github-token');
+    input.value = '  github_pat_example  ';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[aria-labelledby="github-heading"] form').dispatchEvent(new Event('submit', { cancelable: true }));
+    fixture.detectChanges();
+    const request = TestBed.inject(HttpTestingController).expectOne('/connectors/github/authorize');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.headers.get('Authorization')).toBe('Bearer local-session');
+    expect(request.request.body).toEqual({ token: 'github_pat_example' });
+    expect(fixture.nativeElement.querySelector('#github-token').disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('[aria-labelledby="github-heading"] button').textContent).toContain('Saving');
+    fixture.nativeElement.querySelector('[aria-labelledby="github-heading"] form').dispatchEvent(new Event('submit', { cancelable: true }));
+    TestBed.inject(HttpTestingController).expectNone('/connectors/github/authorize');
+    request.flush({ ...connection, provider: 'github' });
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('#github-token').value).toBe('');
+    expect(fixture.nativeElement.querySelector('#github-token').type).toBe('password');
+    expect(fixture.nativeElement.textContent).not.toContain('github_pat_example');
+    expect(fixture.nativeElement.querySelector('[role="status"]').textContent).toContain('Connected as alice');
+    expect(JSON.stringify(sessionStorage)).not.toContain('github_pat_example');
+    expect(JSON.stringify(localStorage)).not.toContain('github_pat_example');
   });
 
   it('explains rejected read permissions and allows retry', async () => {

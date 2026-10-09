@@ -346,7 +346,11 @@ is preserved; encryption and decryption are shared by the connectors. Credential
 are never returned to the browser. Requests only use GET and redirects are rejected.
 GitHub discovery uses `/user/repos`; GitLab uses
 `/api/v4/personal_access_tokens/self/associations` (GitLab 17.4+), which supports
-the existing read scopes without requiring additional API permissions. Provider
+the existing read scopes without requiring additional API permissions. GitLab
+requests include `min_access_level=20` (Reporter or higher) to limit discovery to
+repository read access and avoid expensive unfiltered public associations.
+Public projects without membership and roles below Reporter are excluded.
+Provider
 pagination URLs are constructed locally. A full final page may trigger one extra
 request before `has_more` becomes false. Pages must be between 1 and 10000.
 
@@ -354,7 +358,7 @@ Missing, expired, or invalidated connections return `404`; rejected provider tok
 return `403`; provider/network errors return `502`. Local session failures return
 `401`; absent connector configuration returns `503`; database/decryption failures
 return `500`. Responses disable caching. GitHub discovery requires a saved GitHub
-connection; GitHub authorization remains a separate placeholder.
+connection.
 
 The frontend fetches pages on opening the selector, searches every loaded
 repository name and namespace without case sensitivity, and clears repository
@@ -363,3 +367,36 @@ alongside branch/commit inputs; executing provider imports remains separate work
 
 References: [GitHub repository discovery](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)
 and [GitLab token associations](https://docs.gitlab.com/api/personal_access_tokens/#list-all-token-associations).
+
+## GitHub token authorization
+
+`POST /connectors/github/authorize` requires a local session bearer token and
+JSON `{"token":"github_pat_..."}`. It verifies the account using `/user` and
+repository discovery using `/user/repos`, then saves an encrypted connection
+for the authenticated local user. Reconnecting replaces that user's GitHub
+connection. Responses contain only provider, external account ID, and username.
+
+Use a fine-grained personal access token for the selected repositories with
+Contents read-only permission; classic tokens can use `repo` for private
+repositories. Fine-grained permissions cannot be inferred from OAuth scope
+headers: GitHub enforces access on each repository request. Authorization
+verifies identity and discovery, not Contents access to every repository.
+Returned OAuth scopes and token expiry are stored when GitHub provides them.
+Missing expiry stays NULL; GitHub still rejects expired or revoked tokens.
+
+`CONNECTOR_TOKEN_KEY` enables this connector using the same key as GitLab.
+The frontend Connectors page supports masked token entry for both providers.
+Status codes follow GitLab: `401` for invalid local sessions, `400` for rejected
+provider tokens or permissions, `502` for provider outages/rate limits, and
+`503` when encryption is not configured. Successful responses use `no-store`.
+
+Reference: [GitHub personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+
+`GITHUB_BASE_URL` configures the API base used by both GitHub authorization and
+repository discovery. It defaults to `https://api.github.com`. For a private
+GitHub Enterprise Server, set `GITHUB_BASE_URL=https://github.example.com/api/v3`.
+A trailing slash is optional. HTTPS is required except for loopback development
+servers; credentials, query strings, fragments, and unrelated paths are rejected.
+Restart the API after changing this setting.
+
+Reference: [GitHub Enterprise REST API base URL](https://docs.github.com/en/enterprise-server@3.19/rest/using-the-rest-api/getting-started-with-the-rest-api).

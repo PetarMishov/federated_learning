@@ -13,7 +13,7 @@ pub fn connectors_router() -> Router<AppState> {
     Router::new()
         .merge(github::github_router())
         .route(
-            "/connectors/gitlab/authorize",
+            "/connectors/{provider}/authorize",
             post(gitlab::authorization::authorize_request),
         )
         .route(
@@ -26,7 +26,8 @@ pub fn connectors_router() -> Router<AppState> {
 mod tests {
     use super::*;
     use crate::connectors::{
-        gitlab::authorization::GitlabAuthorization, repositories::RepositoryClient,
+        github::authorization::GithubAuthorization, gitlab::authorization::GitlabAuthorization,
+        repositories::RepositoryClient,
     };
     use axum::Extension;
     use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -38,6 +39,7 @@ mod tests {
         let secret = b"connector-test-secret-at-least-thirty-two-bytes";
         let app = connectors_router()
             .layer(Extension(None::<Arc<GitlabAuthorization>>))
+            .layer(Extension(None::<Arc<GithubAuthorization>>))
             .layer(Extension(None::<Arc<RepositoryClient>>))
             .with_state(AppState {
                 pool: PgPool::connect_lazy("postgres://localhost/unused").unwrap(),
@@ -51,17 +53,19 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let client = reqwest::Client::new();
-        for token in [None, Some("forged")] {
-            let mut request = client
-                .post(format!("http://{address}/connectors/gitlab/authorize"))
-                .json(&serde_json::json!({"token": "submitted-token"}));
-            if let Some(token) = token {
-                request = request.bearer_auth(token);
+        for provider in ["github", "gitlab"] {
+            for token in [None, Some("forged")] {
+                let mut request = client
+                    .post(format!("http://{address}/connectors/{provider}/authorize"))
+                    .json(&serde_json::json!({"token": "submitted-token"}));
+                if let Some(token) = token {
+                    request = request.bearer_auth(token);
+                }
+                assert_eq!(
+                    request.send().await.unwrap().status(),
+                    axum::http::StatusCode::UNAUTHORIZED
+                );
             }
-            assert_eq!(
-                request.send().await.unwrap().status(),
-                axum::http::StatusCode::UNAUTHORIZED
-            );
         }
         for provider in ["github", "gitlab"] {
             let response = client

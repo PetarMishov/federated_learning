@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoding_key = state::signing_key(&secret)?;
     let decoding_key = state::decoding_key(&secret)?;
     let git = git::GitClient::from_env()?;
+    let github = connectors::github::authorization::GithubAuthorization::from_env()?.map(Arc::new);
     let gitlab = connectors::gitlab::authorization::GitlabAuthorization::from_env()?.map(Arc::new);
     let repositories = connectors::repositories::RepositoryClient::from_env()?.map(Arc::new);
     let options = db::connection_options()?;
@@ -40,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routers::connectors_router())
         .fallback(not_found)
         .layer(Extension(gitlab))
+        .layer(Extension(github))
         .layer(Extension(repositories))
         .with_state(app_state);
 

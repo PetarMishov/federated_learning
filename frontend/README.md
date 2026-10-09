@@ -92,19 +92,18 @@ local folder imports have no repository selector.
 
 The API serves `GET /connectors/{github|gitlab}/repositories?page=1`. Missing or
 rejected provider credentials produce an explanatory message and retry control.
-GitHub token authorization remains a backend placeholder; its repository list
-requires an existing saved GitHub connection. GitLab connections can be created
-through the existing token authorization endpoint. Repository import itself is
+GitHub and GitLab connections can be created through the Connectors page. Repository import itself is
 still separate from selecting a repository.
 
 ## Connectors page
 
 The sidebar links to `/connectors`, protected by the existing login guard.
-GitLab's personal access token form submits to the existing
-`POST /connectors/gitlab/authorize` endpoint. Tokens remain masked without a reveal control, are cleared
+Personal access token forms submit to
+`POST /connectors/gitlab/authorize` and `POST /connectors/github/authorize`. Tokens remain masked without a reveal control, are cleared
 after a successful save, and never persisted in browser storage. The page displays
 the returned account name and explains failures so users can retry. Saved status
 reflects saves in the current visit; there is no connection-status endpoint to
-restore it after navigating away. GitHub's form is disabled with a Coming soon
-message because its authorization endpoint is not implemented. This page requires
-no backend changes.
+restore it after navigating away. Both forms have independent saving and error
+states. GitHub users should select repositories on a fine-grained token and
+grant Contents read-only permission; classic tokens can use `repo` for private
+repositories. Configure `CONNECTOR_TOKEN_KEY` in the API to enable both providers.

@@ -175,6 +175,12 @@ export class UsersApi {
     });
   }
 
+  authorizeGithub(token: string) {
+    return this.http.post<ProviderConnection>('/connectors/github/authorize', { token }, {
+      headers: { Authorization: `Bearer ${this.token()}` },
+    });
+  }
+
   getRepositories(provider: RepositoryProvider, page = 1) {
     return this.http.get<RepositoryList>(`/connectors/${provider}/repositories`, {
       headers: { Authorization: `Bearer ${this.token()}` },

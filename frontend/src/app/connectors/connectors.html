@@ -21,10 +21,20 @@
     </form>
   </section>
   <section class="connector-card" aria-labelledby="github-heading">
-    <div class="card-heading"><h2 id="github-heading">GitHub</h2><span class="availability">Coming soon</span></div>
-    <p id="github-unavailable">GitHub token connections are not available yet.</p>
-    <label for="github-token">Personal access token</label>
-    <input id="github-token" type="password" autocomplete="off" disabled aria-describedby="github-unavailable">
-    <button type="button" disabled>Save token</button>
+    <h2 id="github-heading">GitHub</h2>
+    <p>Add or replace your personal access token with a fine-grained token for your selected repositories with <code>Contents: read-only</code> permission. Classic tokens can use <code>repo</code> for private repositories.</p>
+    @if (githubConnection(); as saved) {
+      <p class="connection-status" role="status">Token saved. Connected as <strong>{{ saved.external_username }}</strong>.</p>
+    }
+    <form (submit)="saveGithub($event)" [attr.aria-busy]="githubSaving()">
+      <label for="github-token">Personal access token</label>
+      <input id="github-token" type="password" autocomplete="off"
+        spellcheck="false" autocapitalize="none" maxlength="4096" required
+        aria-describedby="github-token-help" [value]="githubToken()" [disabled]="githubSaving()"
+        #githubTokenInput (input)="githubToken.set(githubTokenInput.value)">
+      <p id="github-token-help" class="hint">The token is stored encrypted and is never shown again after saving.</p>
+      @if (githubError()) { <p class="error" role="alert">{{ githubError() }}</p> }
+      <button type="submit" [disabled]="githubSaving() || !githubToken().trim()">{{ githubSaving() ? 'Saving…' : 'Save token' }}</button>
+    </form>
   </section>
 </div>
